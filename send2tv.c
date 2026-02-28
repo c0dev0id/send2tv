@@ -50,8 +50,8 @@ static void
 usage(void)
 {
 	fprintf(stderr,
-	    "usage: send2tv [-tv] -h host file ...\n"
-	    "       send2tv [-av] -h host -s\n"
+	    "usage: send2tv [-tv] [-b kbps] -h host file ...\n"
+	    "       send2tv [-av] [-b kbps] -h host -s\n"
 	    "       send2tv [-v] -d\n"
 	    "\n"
 	    "  -h host   TV IP address or hostname\n"
@@ -60,6 +60,7 @@ usage(void)
 	    "  -a device sndio audio device (default: snd/default.mon)\n"
 	    "  -d        discover TVs on the network\n"
 	    "  -p port   HTTP server port (default: auto)\n"
+	    "  -b kbps   video bitrate in kbps (default: 2000)\n"
 	    "  -v        verbose/debug output\n"
 	    "\n"
 	    "During playback:\n"
@@ -88,6 +89,7 @@ main(int argc, char *argv[])
 	int		 transcode = 0;
 	int		 discover = 0;
 	int		 port = 0;
+	int		 bitrate = 2000;
 	int		 ch;
 	int		 fileidx;
 	upnp_ctx_t	 upnp;
@@ -95,10 +97,18 @@ main(int argc, char *argv[])
 	media_ctx_t	 media;
 	char		 media_url[256];
 
-	while ((ch = getopt(argc, argv, "a:h:sp:dvt")) != -1) {
+	while ((ch = getopt(argc, argv, "a:b:h:sp:dvt")) != -1) {
 		switch (ch) {
 		case 'a':
 			audiodev = optarg;
+			break;
+		case 'b':
+			bitrate = atoi(optarg);
+			if (bitrate <= 0) {
+				fprintf(stderr, "Invalid bitrate: %s\n",
+				    optarg);
+				usage();
+			}
 			break;
 		case 'h':
 			host = optarg;
@@ -156,6 +166,7 @@ main(int argc, char *argv[])
 	strlcpy(upnp.tv_ip, host, sizeof(upnp.tv_ip));
 	media.pipe_rd = -1;
 	media.pipe_wr = -1;
+	media.bitrate = bitrate;
 	media.sndio_device = audiodev;
 
 	/*
@@ -317,6 +328,7 @@ main(int argc, char *argv[])
 		media.running = 1;
 		media.pipe_rd = -1;
 		media.pipe_wr = -1;
+		media.bitrate = bitrate;
 
 		printf("\n[%d/%d] %s\n", fileidx + 1, argc, file);
 

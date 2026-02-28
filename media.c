@@ -546,13 +546,16 @@ init_output(media_ctx_t *ctx, int has_video, int has_audio)
 	/* Reduce muxer latency: flush after each packet, no delay */
 	ctx->ofmt_ctx->flush_packets = 1;
 	ctx->ofmt_ctx->max_delay = 0;
+	/* Resend PAT/PMT and codec params so the TV can lock on faster */
+	av_opt_set(ctx->ofmt_ctx->priv_data, "mpegts_flags",
+	    "+resend_headers", AV_OPT_SEARCH_CHILDREN);
 
 	/* Custom AVIO writing to the pipe */
-	avio_buf = av_malloc(SEND2TV_BUF_SIZE);
+	avio_buf = av_malloc(SEND2TV_AVIO_SIZE);
 	if (avio_buf == NULL)
 		return -1;
 
-	avio = avio_alloc_context(avio_buf, SEND2TV_BUF_SIZE, 1,
+	avio = avio_alloc_context(avio_buf, SEND2TV_AVIO_SIZE, 1,
 	    ctx, NULL, avio_write_pipe, NULL);
 	if (avio == NULL) {
 		av_free(avio_buf);
@@ -648,7 +651,9 @@ init_video_encoder(media_ctx_t *ctx, int width, int height,
 		ctx->video_enc->hw_frames_ctx =
 		    av_buffer_ref(hw_frames_ref);
 		av_buffer_unref(&hw_frames_ref);
-		ctx->video_enc->bit_rate = 4000000;
+		ctx->video_enc->bit_rate = (int64_t)ctx->bitrate * 1000;
+		ctx->video_enc->rc_max_rate = (int64_t)ctx->bitrate * 1000;
+		ctx->video_enc->rc_buffer_size = ctx->bitrate * 1000;
 		ctx->video_enc->profile = AV_PROFILE_H264_HIGH;
 		ctx->video_enc->level = 41;
 		/* Minimize hardware encoder pipeline depth */
@@ -656,12 +661,16 @@ init_video_encoder(media_ctx_t *ctx, int width, int height,
 		    "async_depth", 1, 0);
 	} else {
 		ctx->video_enc->pix_fmt = AV_PIX_FMT_YUV420P;
-		ctx->video_enc->bit_rate = 4000000;
+		ctx->video_enc->bit_rate = (int64_t)ctx->bitrate * 1000;
+		ctx->video_enc->rc_max_rate = (int64_t)ctx->bitrate * 1000;
+		ctx->video_enc->rc_buffer_size = ctx->bitrate * 1000;
 		av_opt_set(ctx->video_enc->priv_data, "preset",
 		    "ultrafast", 0);
 		av_opt_set(ctx->video_enc->priv_data, "tune",
 		    "zerolatency", 0);
-		av_opt_set(ctx->video_enc->priv_data, "refs", "3", 0);
+		av_opt_set(ctx->video_enc->priv_data, "refs", "1", 0);
+		av_opt_set(ctx->video_enc->priv_data, "nal-hrd",
+		    "cbr", 0);
 		ctx->video_enc->profile = AV_PROFILE_H264_HIGH;
 		ctx->video_enc->level = 41;
 		av_opt_set(ctx->video_enc->priv_data, "profile",
