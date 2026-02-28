@@ -336,7 +336,7 @@ media_probe(media_ctx_t *ctx, const char *filepath, int force_transcode)
 	} else {
 		strlcpy(ctx->mime_type, "video/mp2t",
 		    sizeof(ctx->mime_type));
-		strlcpy(ctx->dlna_profile, "AVC_TS_MP_SD_AAC_MULT5",
+		strlcpy(ctx->dlna_profile, "AVC_TS_HP_HD_AAC_MULT5",
 		    sizeof(ctx->dlna_profile));
 	}
 
@@ -1118,7 +1118,7 @@ media_open_screen(media_ctx_t *ctx)
 
 	ctx->needs_transcode = 1;
 	strlcpy(ctx->mime_type, "video/mp2t", sizeof(ctx->mime_type));
-	strlcpy(ctx->dlna_profile, "AVC_TS_MP_SD_AAC_MULT5",
+	strlcpy(ctx->dlna_profile, "AVC_TS_HP_HD_AAC_MULT5",
 	    sizeof(ctx->dlna_profile));
 
 	return 0;

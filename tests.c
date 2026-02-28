@@ -14,6 +14,7 @@
 int verbose = 0;
 
 /* Include source files to access static functions */
+#include "dlna.c"
 #include "media.c"
 #include "upnp.c"
 
@@ -597,6 +598,310 @@ TEST(dlna_h264_unknown_fmt_empty)
 }
 
 /* ------------------------------------------------------------------ */
+/* Tests: build_dlna_features (DLNA spec compliance)                  */
+/* ------------------------------------------------------------------ */
+
+/*
+ * DLNA spec: file mode (non-streaming) must have OP=01 (byte-seek
+ * supported), CI=0 (not transcoded), and the PN tag present.
+ */
+TEST(dlna_features_file_with_profile)
+{
+	char buf[256];
+
+	build_dlna_features(buf, sizeof(buf), "AVC_MP4_MP_SD_AAC", 0);
+	ASSERT(strstr(buf, "DLNA.ORG_PN=AVC_MP4_MP_SD_AAC") != NULL);
+	ASSERT(strstr(buf, "DLNA.ORG_OP=01") != NULL);
+	ASSERT(strstr(buf, "DLNA.ORG_CI=0") != NULL);
+	ASSERT(strstr(buf, "DLNA.ORG_FLAGS=") != NULL);
+}
+
+/*
+ * DLNA spec: streaming mode must have OP=00 (no seek), CI=1
+ * (transcoded), and the PN tag present.
+ */
+TEST(dlna_features_streaming_with_profile)
+{
+	char buf[256];
+
+	build_dlna_features(buf, sizeof(buf), "AVC_TS_HP_HD_AAC_MULT5", 1);
+	ASSERT(strstr(buf, "DLNA.ORG_PN=AVC_TS_HP_HD_AAC_MULT5") != NULL);
+	ASSERT(strstr(buf, "DLNA.ORG_OP=00") != NULL);
+	ASSERT(strstr(buf, "DLNA.ORG_CI=1") != NULL);
+}
+
+/*
+ * When dlna_profile is NULL, DLNA.ORG_PN must be omitted entirely.
+ */
+TEST(dlna_features_null_profile)
+{
+	char buf[256];
+
+	build_dlna_features(buf, sizeof(buf), NULL, 0);
+	ASSERT(strstr(buf, "DLNA.ORG_PN") == NULL);
+	ASSERT(strstr(buf, "DLNA.ORG_OP=01") != NULL);
+	ASSERT(strstr(buf, "DLNA.ORG_CI=0") != NULL);
+}
+
+/*
+ * When dlna_profile is empty string, DLNA.ORG_PN must be omitted.
+ */
+TEST(dlna_features_empty_profile)
+{
+	char buf[256];
+
+	build_dlna_features(buf, sizeof(buf), "", 0);
+	ASSERT(strstr(buf, "DLNA.ORG_PN") == NULL);
+	ASSERT(strstr(buf, "DLNA.ORG_OP=01") != NULL);
+}
+
+/*
+ * DLNA spec: DLNA.ORG_OP must be exactly two characters "ab" where
+ * a=time-seek support and b=byte-seek support, each 0 or 1.
+ * File mode: a=0 b=1 -> "01".  Streaming: a=0 b=0 -> "00".
+ */
+TEST(dlna_features_op_format_file)
+{
+	char buf[256];
+	char *p;
+
+	build_dlna_features(buf, sizeof(buf), "AVC_MP4_MP_SD_AAC", 0);
+	p = strstr(buf, "DLNA.ORG_OP=");
+	ASSERT(p != NULL);
+	p += strlen("DLNA.ORG_OP=");
+	/* Exactly "01" followed by a separator */
+	ASSERT(p[0] == '0');
+	ASSERT(p[1] == '1');
+	ASSERT(p[2] == ';');
+}
+
+TEST(dlna_features_op_format_streaming)
+{
+	char buf[256];
+	char *p;
+
+	build_dlna_features(buf, sizeof(buf), "AVC_TS_HP_HD_AAC_MULT5", 1);
+	p = strstr(buf, "DLNA.ORG_OP=");
+	ASSERT(p != NULL);
+	p += strlen("DLNA.ORG_OP=");
+	ASSERT(p[0] == '0');
+	ASSERT(p[1] == '0');
+	ASSERT(p[2] == ';');
+}
+
+/*
+ * DLNA spec: DLNA.ORG_CI must be "0" for original content and "1"
+ * for transcoded content.
+ */
+TEST(dlna_features_ci_original)
+{
+	char buf[256];
+	char *p;
+
+	build_dlna_features(buf, sizeof(buf), "AVC_MP4_MP_SD_AAC", 0);
+	p = strstr(buf, "DLNA.ORG_CI=");
+	ASSERT(p != NULL);
+	p += strlen("DLNA.ORG_CI=");
+	ASSERT(p[0] == '0');
+	ASSERT(p[1] == ';');
+}
+
+TEST(dlna_features_ci_transcoded)
+{
+	char buf[256];
+	char *p;
+
+	build_dlna_features(buf, sizeof(buf), "AVC_TS_HP_HD_AAC_MULT5", 1);
+	p = strstr(buf, "DLNA.ORG_CI=");
+	ASSERT(p != NULL);
+	p += strlen("DLNA.ORG_CI=");
+	ASSERT(p[0] == '1');
+	ASSERT(p[1] == ';');
+}
+
+/*
+ * DLNA spec: DLNA.ORG_FLAGS must be exactly 32 hexadecimal characters.
+ * Our flags are "01700000000000000000000000000000" which sets:
+ *   bit 24: DLNA_ORG_FLAG_SENDER_PACED
+ *   bit 22: DLNA_ORG_FLAG_CONNECTION_STALLING
+ *   bit 21: DLNA_ORG_FLAG_DLNA_V15
+ *   bit 20: DLNA_ORG_FLAG_STREAMING_TRANSFER
+ */
+TEST(dlna_features_flags_length)
+{
+	char buf[256];
+	char *p;
+	int i;
+
+	build_dlna_features(buf, sizeof(buf), "AVC_MP4_MP_SD_AAC", 0);
+	p = strstr(buf, "DLNA.ORG_FLAGS=");
+	ASSERT(p != NULL);
+	p += strlen("DLNA.ORG_FLAGS=");
+	/* Must be exactly 32 hex characters */
+	for (i = 0; i < 32; i++) {
+		ASSERT((p[i] >= '0' && p[i] <= '9') ||
+		    (p[i] >= 'a' && p[i] <= 'f') ||
+		    (p[i] >= 'A' && p[i] <= 'F'));
+	}
+	/* Must end after 32 chars (nul or no more content) */
+	ASSERT(p[32] == '\0' || p[32] == ';');
+}
+
+TEST(dlna_features_flags_value)
+{
+	char buf[256];
+	char *p;
+
+	build_dlna_features(buf, sizeof(buf), "AVC_MP4_MP_SD_AAC", 0);
+	p = strstr(buf, "DLNA.ORG_FLAGS=");
+	ASSERT(p != NULL);
+	p += strlen("DLNA.ORG_FLAGS=");
+	ASSERT(strncmp(p, "01700000000000000000000000000000", 32) == 0);
+}
+
+/*
+ * DLNA spec: the fourth field of protocolInfo in DIDL-Lite must
+ * match what's in the contentFeatures.dlna.org HTTP header.
+ * Verify build_dlna_features produces consistent output for both.
+ */
+TEST(dlna_features_consistency)
+{
+	char buf1[256], buf2[256];
+
+	build_dlna_features(buf1, sizeof(buf1), "AVC_TS_HP_HD_AAC_MULT5", 1);
+	build_dlna_features(buf2, sizeof(buf2), "AVC_TS_HP_HD_AAC_MULT5", 1);
+	ASSERT_STR_EQ(buf1, buf2);
+}
+
+/*
+ * DLNA spec: semicolons separate each field in the features string.
+ * Verify proper structure with profile present.
+ */
+TEST(dlna_features_field_order)
+{
+	char buf[256];
+	char *pn, *op, *ci, *fl;
+
+	build_dlna_features(buf, sizeof(buf), "AVC_MP4_MP_SD_AAC", 0);
+	pn = strstr(buf, "DLNA.ORG_PN=");
+	op = strstr(buf, "DLNA.ORG_OP=");
+	ci = strstr(buf, "DLNA.ORG_CI=");
+	fl = strstr(buf, "DLNA.ORG_FLAGS=");
+	ASSERT(pn != NULL);
+	ASSERT(op != NULL);
+	ASSERT(ci != NULL);
+	ASSERT(fl != NULL);
+	/* PN comes first, then OP, then CI, then FLAGS */
+	ASSERT(pn < op);
+	ASSERT(op < ci);
+	ASSERT(ci < fl);
+}
+
+/*
+ * Without profile: field order should be OP, CI, FLAGS.
+ */
+TEST(dlna_features_field_order_no_profile)
+{
+	char buf[256];
+	char *op, *ci, *fl;
+
+	build_dlna_features(buf, sizeof(buf), NULL, 1);
+	op = strstr(buf, "DLNA.ORG_OP=");
+	ci = strstr(buf, "DLNA.ORG_CI=");
+	fl = strstr(buf, "DLNA.ORG_FLAGS=");
+	ASSERT(op != NULL);
+	ASSERT(ci != NULL);
+	ASSERT(fl != NULL);
+	ASSERT(op < ci);
+	ASSERT(ci < fl);
+}
+
+/*
+ * Transcode path: the hardcoded profile must be AVC_TS_HP_HD_AAC_MULT5
+ * to match the H.264 High Profile encoder output.
+ */
+TEST(dlna_transcode_profile_matches_encoder)
+{
+	media_ctx_t m = {0};
+
+	m.needs_transcode = 1;
+	strlcpy(m.mime_type, "video/mp2t", sizeof(m.mime_type));
+	strlcpy(m.dlna_profile, "AVC_TS_HP_HD_AAC_MULT5",
+	    sizeof(m.dlna_profile));
+	/* HP = High Profile, matches AV_PROFILE_H264_HIGH in encoder */
+	ASSERT(strstr(m.dlna_profile, "HP") != NULL);
+	/* TS = MPEG-TS, matches the mpegts muxer */
+	ASSERT(strstr(m.dlna_profile, "TS") != NULL);
+	/* AAC audio */
+	ASSERT(strstr(m.dlna_profile, "AAC") != NULL);
+}
+
+/*
+ * Transcode MIME type must be video/mp2t (MPEG transport stream).
+ */
+TEST(dlna_transcode_mime_type)
+{
+	media_ctx_t m = {0};
+
+	strlcpy(m.mime_type, "video/mp2t", sizeof(m.mime_type));
+	ASSERT_STR_EQ(m.mime_type, "video/mp2t");
+}
+
+/*
+ * Screen capture path: same profile and MIME as transcode.
+ */
+TEST(dlna_screen_capture_profile)
+{
+	media_ctx_t m = {0};
+
+	m.needs_transcode = 1;
+	strlcpy(m.mime_type, "video/mp2t", sizeof(m.mime_type));
+	strlcpy(m.dlna_profile, "AVC_TS_HP_HD_AAC_MULT5",
+	    sizeof(m.dlna_profile));
+	ASSERT_STR_EQ(m.dlna_profile, "AVC_TS_HP_HD_AAC_MULT5");
+	ASSERT_STR_EQ(m.mime_type, "video/mp2t");
+}
+
+/*
+ * DLNA protocolInfo fourth field: verify full features string can be
+ * used as-is in protocolInfo="http-get:*:<mime>:<features>".
+ * The features string must not contain colons (which delimit
+ * protocolInfo fields).
+ */
+TEST(dlna_features_no_colons)
+{
+	char buf[256];
+
+	build_dlna_features(buf, sizeof(buf), "AVC_TS_HP_HD_AAC_MULT5", 1);
+	ASSERT(strchr(buf, ':') == NULL);
+}
+
+TEST(dlna_features_no_colons_no_profile)
+{
+	char buf[256];
+
+	build_dlna_features(buf, sizeof(buf), NULL, 0);
+	ASSERT(strchr(buf, ':') == NULL);
+}
+
+/*
+ * DLNA spec: the direct-play MPEG-TS profile should be Main Profile SD
+ * (for passthrough files), while the transcode profile should be High
+ * Profile HD (since the encoder uses AV_PROFILE_H264_HIGH).
+ */
+TEST(dlna_mpegts_direct_vs_transcode)
+{
+	media_ctx_t direct = {0};
+
+	/* Direct play of an MPEG-TS file */
+	set_dlna_profile(&direct, "mpegts", AV_CODEC_ID_H264);
+	ASSERT_STR_EQ(direct.dlna_profile, "AVC_TS_MP_SD_AAC_MULT5");
+
+	/* Transcode uses AVC_TS_HP_HD_AAC_MULT5 (set by media_probe) */
+	ASSERT(strcmp(direct.dlna_profile, "AVC_TS_HP_HD_AAC_MULT5") != 0);
+}
+
+/* ------------------------------------------------------------------ */
 /* Tests: xml_extract                                                 */
 /* ------------------------------------------------------------------ */
 
@@ -838,6 +1143,27 @@ main(void)
 	RUN_TEST(dlna_mpeg4);
 	RUN_TEST(dlna_vp8_empty);
 	RUN_TEST(dlna_h264_unknown_fmt_empty);
+
+	printf("\nbuild_dlna_features:\n");
+	RUN_TEST(dlna_features_file_with_profile);
+	RUN_TEST(dlna_features_streaming_with_profile);
+	RUN_TEST(dlna_features_null_profile);
+	RUN_TEST(dlna_features_empty_profile);
+	RUN_TEST(dlna_features_op_format_file);
+	RUN_TEST(dlna_features_op_format_streaming);
+	RUN_TEST(dlna_features_ci_original);
+	RUN_TEST(dlna_features_ci_transcoded);
+	RUN_TEST(dlna_features_flags_length);
+	RUN_TEST(dlna_features_flags_value);
+	RUN_TEST(dlna_features_consistency);
+	RUN_TEST(dlna_features_field_order);
+	RUN_TEST(dlna_features_field_order_no_profile);
+	RUN_TEST(dlna_transcode_profile_matches_encoder);
+	RUN_TEST(dlna_transcode_mime_type);
+	RUN_TEST(dlna_screen_capture_profile);
+	RUN_TEST(dlna_features_no_colons);
+	RUN_TEST(dlna_features_no_colons_no_profile);
+	RUN_TEST(dlna_mpegts_direct_vs_transcode);
 
 	printf("\nxml_extract:\n");
 	RUN_TEST(xml_extract_basic);

@@ -8,7 +8,7 @@ PKG_LIBS != pkg-config --libs libavformat libavcodec libavutil \
 LDFLAGS = ${PKG_LIBS}
 LDFLAGS += -lpthread
 
-SRC = send2tv.c upnp.c httpd.c media.c
+SRC = send2tv.c upnp.c httpd.c media.c dlna.c
 OBJ = ${SRC:.c=.o}
 
 send2tv: ${OBJ}
@@ -17,7 +17,7 @@ send2tv: ${OBJ}
 .c.o:
 	${CC} ${CFLAGS} -c $<
 
-tests: tests.c media.c upnp.c send2tv.h
+tests: tests.c media.c upnp.c dlna.c send2tv.h
 	${CC} -Wall -Wextra -O2 -I ffmpeg-8.0.1 -o tests tests.c \
 	    -lpthread -Wl,--unresolved-symbols=ignore-all
 

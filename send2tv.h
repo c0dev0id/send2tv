@@ -99,6 +99,10 @@ typedef struct {
 	pthread_t	 thread;
 } httpd_ctx_t;
 
+/* dlna.c */
+void	 build_dlna_features(char *buf, size_t buflen,
+	    const char *dlna_profile, int is_streaming);
+
 /* upnp.c */
 int	 upnp_discover(void);
 int	 upnp_find_transport(upnp_ctx_t *ctx);

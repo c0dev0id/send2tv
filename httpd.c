@@ -48,21 +48,8 @@ send_headers(int fd, int status, const char *status_text,
 	char	 dlna_features[256];
 	int	 n;
 
-	if (dlna_profile != NULL && dlna_profile[0] != '\0')
-		snprintf(dlna_features, sizeof(dlna_features),
-		    "DLNA.ORG_PN=%s;DLNA.ORG_OP=%s;DLNA.ORG_CI=%s;"
-		    "DLNA.ORG_FLAGS="
-		    "01700000000000000000000000000000",
-		    dlna_profile,
-		    is_streaming ? "00" : "01",
-		    is_streaming ? "1" : "0");
-	else
-		snprintf(dlna_features, sizeof(dlna_features),
-		    "DLNA.ORG_OP=%s;DLNA.ORG_CI=%s;"
-		    "DLNA.ORG_FLAGS="
-		    "01700000000000000000000000000000",
-		    is_streaming ? "00" : "01",
-		    is_streaming ? "1" : "0");
+	build_dlna_features(dlna_features, sizeof(dlna_features),
+	    dlna_profile, is_streaming);
 
 	n = snprintf(hdrs, sizeof(hdrs),
 	    "HTTP/1.1 %d %s\r\n"
