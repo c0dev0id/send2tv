@@ -14,13 +14,14 @@ usage(void)
 {
 	fprintf(stderr,
 	    "usage: send2tv [-tv] -h host -f file\n"
-	    "       send2tv [-v] -h host -s\n"
+	    "       send2tv [-av] -h host -s\n"
 	    "       send2tv [-v] -d\n"
 	    "\n"
 	    "  -h host   TV IP address or hostname\n"
 	    "  -f file   media file to send\n"
 	    "  -t        force transcoding\n"
 	    "  -s        stream screen and system audio\n"
+	    "  -a device sndio audio device (default: snd/default.mon)\n"
 	    "  -d        discover TVs on the network\n"
 	    "  -p port   HTTP server port (default: auto)\n"
 	    "  -v        verbose/debug output\n");
@@ -41,6 +42,7 @@ main(int argc, char *argv[])
 {
 	const char	*host = NULL;
 	const char	*file = NULL;
+	const char	*audiodev = "snd/default.mon";
 	int		 screen = 0;
 	int		 transcode = 0;
 	int		 discover = 0;
@@ -51,8 +53,11 @@ main(int argc, char *argv[])
 	media_ctx_t	 media;
 	char		 media_url[256];
 
-	while ((ch = getopt(argc, argv, "h:f:sp:dvt")) != -1) {
+	while ((ch = getopt(argc, argv, "a:h:f:sp:dvt")) != -1) {
 		switch (ch) {
+		case 'a':
+			audiodev = optarg;
+			break;
 		case 'h':
 			host = optarg;
 			break;
@@ -108,6 +113,7 @@ main(int argc, char *argv[])
 
 	strlcpy(upnp.tv_ip, host, sizeof(upnp.tv_ip));
 	media.running = 1;
+	media.sndio_device = audiodev;
 
 	if (screen) {
 		media.mode = MODE_SCREEN;
