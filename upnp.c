@@ -506,6 +506,16 @@ upnp_set_uri(upnp_ctx_t *ctx, const char *uri, const char *mime,
 	char	*didl_encoded;
 	char	 body[4096];
 	char	 dlna_features[256];
+	char	*title_xml, *uri_xml;
+	int	 ret;
+
+	title_xml = xml_encode(title);
+	uri_xml = xml_encode(uri);
+	if (title_xml == NULL || uri_xml == NULL) {
+		free(title_xml);
+		free(uri_xml);
+		return -1;
+	}
 
 	if (dlna_profile != NULL && dlna_profile[0] != '\0')
 		snprintf(dlna_features, sizeof(dlna_features),
@@ -534,11 +544,14 @@ upnp_set_uri(upnp_ctx_t *ctx, const char *uri, const char *mime,
 	    "%s\">%s</res>"
 	    "</item>"
 	    "</DIDL-Lite>",
-	    title, mime, dlna_features, uri);
+	    title_xml, mime, dlna_features, uri_xml);
 
 	didl_encoded = xml_encode(didl);
-	if (didl_encoded == NULL)
+	if (didl_encoded == NULL) {
+		free(title_xml);
+		free(uri_xml);
 		return -1;
+	}
 
 	snprintf(body, sizeof(body),
 	    "<u:SetAVTransportURI"
@@ -547,11 +560,14 @@ upnp_set_uri(upnp_ctx_t *ctx, const char *uri, const char *mime,
 	    "<CurrentURI>%s</CurrentURI>"
 	    "<CurrentURIMetaData>%s</CurrentURIMetaData>"
 	    "</u:SetAVTransportURI>",
-	    uri, didl_encoded);
+	    uri_xml, didl_encoded);
 
+	free(title_xml);
+	free(uri_xml);
 	free(didl_encoded);
 
-	return soap_action(ctx, "SetAVTransportURI", body);
+	ret = soap_action(ctx, "SetAVTransportURI", body);
+	return ret;
 }
 
 int
