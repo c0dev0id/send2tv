@@ -107,7 +107,7 @@ int	 httpd_start(httpd_ctx_t *ctx, media_ctx_t *media, int port);
 void	 httpd_stop(httpd_ctx_t *ctx);
 
 /* media.c */
-int	 media_probe(media_ctx_t *ctx, const char *filepath);
+int	 media_probe(media_ctx_t *ctx, const char *filepath, int force_transcode);
 int	 media_open_transcode(media_ctx_t *ctx);
 int	 media_open_screen(media_ctx_t *ctx);
 void	*media_transcode_thread(void *arg);
