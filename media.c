@@ -8,6 +8,16 @@
 #include "send2tv.h"
 
 /*
+ * FFmpeg interrupt callback: returns non-zero to abort blocking I/O.
+ */
+static int
+ffmpeg_interrupt_cb(void *opaque)
+{
+	media_ctx_t *ctx = opaque;
+	return !ctx->running;
+}
+
+/*
  * Custom AVIO write callback: writes encoded data to a pipe fd.
  */
 static int
@@ -17,12 +27,22 @@ avio_write_pipe(void *opaque, const uint8_t *buf, int buf_size)
 avio_write_pipe(void *opaque, uint8_t *buf, int buf_size)
 #endif
 {
-	int	 fd = *(int *)opaque;
-	int	 total = 0;
-	ssize_t	 n;
+	media_ctx_t	*ctx = opaque;
+	int		 total = 0;
+	ssize_t		 n;
+	struct pollfd	 pfd;
+
+	pfd.fd = ctx->pipe_wr;
+	pfd.events = POLLOUT;
 
 	while (total < buf_size) {
-		n = write(fd, buf + total, buf_size - total);
+		if (!ctx->running)
+			return AVERROR(EINTR);
+
+		if (poll(&pfd, 1, 100) == 0)
+			continue;
+
+		n = write(ctx->pipe_wr, buf + total, buf_size - total);
 		if (n < 0) {
 			if (errno == EINTR)
 				continue;
@@ -335,7 +355,7 @@ init_output(media_ctx_t *ctx, int has_video, int has_audio)
 		return -1;
 
 	avio = avio_alloc_context(avio_buf, SEND2TV_BUF_SIZE, 1,
-	    &ctx->pipe_wr, NULL, avio_write_pipe, NULL);
+	    ctx, NULL, avio_write_pipe, NULL);
 	if (avio == NULL) {
 		av_free(avio_buf);
 		return -1;
@@ -546,6 +566,10 @@ media_open_transcode(media_ctx_t *ctx)
 
 	avdevice_register_all();
 
+	/* Install interrupt callback so av_read_frame can be aborted */
+	ctx->ifmt_ctx->interrupt_callback.callback = ffmpeg_interrupt_cb;
+	ctx->ifmt_ctx->interrupt_callback.opaque = ctx;
+
 	/* Open video decoder */
 	if (ctx->video_idx >= 0) {
 		in_st = ctx->ifmt_ctx->streams[ctx->video_idx];
@@ -694,6 +718,9 @@ media_open_screen(media_ctx_t *ctx)
 		return -1;
 	}
 
+	ctx->ifmt_ctx->interrupt_callback.callback = ffmpeg_interrupt_cb;
+	ctx->ifmt_ctx->interrupt_callback.opaque = ctx;
+
 	ret = avformat_find_stream_info(ctx->ifmt_ctx, NULL);
 	if (ret < 0) {
 		fprintf(stderr, "Cannot get x11grab stream info: %s\n",
@@ -736,6 +763,9 @@ media_open_screen(media_ctx_t *ctx)
 			    av_err2str(ret));
 			ctx->sndio_ctx = NULL;
 		} else {
+			ctx->sndio_ctx->interrupt_callback.callback =
+			    ffmpeg_interrupt_cb;
+			ctx->sndio_ctx->interrupt_callback.opaque = ctx;
 			avformat_find_stream_info(ctx->sndio_ctx, NULL);
 			ctx->sndio_audio_idx = 0;
 			st = ctx->sndio_ctx->streams[0];

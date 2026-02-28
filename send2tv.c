@@ -28,6 +28,8 @@ static void
 sighandler(int sig)
 {
 	(void)sig;
+	if (!running)
+		_exit(1);
 	running = 0;
 }
 
@@ -122,6 +124,11 @@ main(int argc, char *argv[])
 		}
 	}
 
+	if (!running) {
+		media_close(&media);
+		return 1;
+	}
+
 	/* Determine our local IP */
 	if (upnp_get_local_ip(&upnp) < 0) {
 		fprintf(stderr, "Cannot determine local IP\n");
@@ -137,6 +144,12 @@ main(int argc, char *argv[])
 		return 1;
 	}
 	printf("HTTP server on port %d\n", httpd.port);
+
+	if (!running) {
+		httpd_stop(&httpd);
+		media_close(&media);
+		return 1;
+	}
 
 	/* Start transcoding/capture thread if needed */
 	if (media.needs_transcode || media.mode == MODE_SCREEN) {
@@ -160,16 +173,22 @@ main(int argc, char *argv[])
 		}
 	}
 
+	/*
+	 * From here on, use goto shutdown for cleanup since
+	 * threads may be running.
+	 */
+	if (!running)
+		goto shutdown;
+
 	/* Find TV's AVTransport service */
 	printf("Connecting to TV at %s...\n", upnp.tv_ip);
-	if (upnp_find_transport(&upnp) < 0) {
-		media.running = 0;
-		httpd_stop(&httpd);
-		media_close(&media);
-		return 1;
-	}
+	if (upnp_find_transport(&upnp) < 0)
+		goto shutdown;
 	printf("AVTransport: %s:%d%s\n", upnp.tv_ip,
 	    upnp.tv_port, upnp.control_url);
+
+	if (!running)
+		goto shutdown;
 
 	/* Build media URL */
 	snprintf(media_url, sizeof(media_url),
@@ -178,21 +197,14 @@ main(int argc, char *argv[])
 	/* Set URI and play */
 	printf("Sending media URL to TV...\n");
 	if (upnp_set_uri(&upnp, media_url, media.mime_type,
-	    file ? file : "Screen") < 0) {
-		fprintf(stderr, "SetAVTransportURI failed\n");
-		media.running = 0;
-		httpd_stop(&httpd);
-		media_close(&media);
-		return 1;
-	}
+	    file ? file : "Screen") < 0)
+		goto shutdown;
 
-	if (upnp_play(&upnp) < 0) {
-		fprintf(stderr, "Play failed\n");
-		media.running = 0;
-		httpd_stop(&httpd);
-		media_close(&media);
-		return 1;
-	}
+	if (!running)
+		goto shutdown;
+
+	if (upnp_play(&upnp) < 0)
+		goto shutdown;
 
 	printf("Playing. Press Ctrl+C to stop.\n");
 
@@ -200,17 +212,13 @@ main(int argc, char *argv[])
 	while (running && media.running)
 		sleep(1);
 
-	/* Stop playback */
+shutdown:
 	printf("\nStopping...\n");
 	upnp_stop(&upnp);
 
 	media.running = 0;
-	if (media.needs_transcode || media.mode == MODE_SCREEN) {
-		/* Close write end of pipe to unblock reader */
-		if (media.pipe_wr >= 0)
-			close(media.pipe_wr);
+	if (media.needs_transcode || media.mode == MODE_SCREEN)
 		pthread_join(media.thread, NULL);
-	}
 
 	httpd_stop(&httpd);
 	media_close(&media);
