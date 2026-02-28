@@ -14,6 +14,7 @@ static struct termios orig_termios;
 static int term_raw = 0;
 static char conf_host[256];
 static char conf_audiodev[64];
+static char conf_codec[32];
 
 static void
 term_restore(void)
@@ -52,15 +53,18 @@ static void
 usage(void)
 {
 	fprintf(stderr,
-	    "usage: send2tv [-tv] [-b kbps] -h host file ...\n"
-	    "       send2tv [-av] [-b kbps] -h host -s\n"
+	    "usage: send2tv [-tv] [-b kbps] [-c codec] -h host file ...\n"
+	    "       send2tv [-av] [-b kbps] [-c codec] -h host -s\n"
 	    "       send2tv [-v] -d\n"
+	    "       send2tv [-v] -q -h host\n"
 	    "\n"
 	    "  -h host   TV IP address or hostname\n"
 	    "  -t        force transcoding\n"
 	    "  -s        stream screen and system audio\n"
 	    "  -a device sndio audio device (default: snd/mon)\n"
 	    "  -d        discover TVs on the network\n"
+	    "  -q        query TV capabilities\n"
+	    "  -c codec  transcode video codec: h264, hevc (default: auto)\n"
 	    "  -p port   HTTP server port (default: auto)\n"
 	    "  -b kbps   video bitrate in kbps (default: 2000)\n"
 	    "  -v        verbose/debug output\n"
@@ -84,7 +88,7 @@ sighandler(int sig)
 
 static void
 load_config(const char **host, const char **audiodev, int *port,
-    int *bitrate, int *transcode)
+    int *bitrate, int *transcode, const char **codec)
 {
 	FILE		*fp;
 	const char	*home;
@@ -183,6 +187,18 @@ load_config(const char **host, const char **audiodev, int *port,
 				    "%s:%d: verbose: "
 				    "expected yes or no\n",
 				    path, lineno);
+		} else if (strcmp(key, "codec") == 0) {
+			if (strcmp(val, "h264") == 0 ||
+			    strcmp(val, "hevc") == 0 ||
+			    strcmp(val, "auto") == 0) {
+				strlcpy(conf_codec, val,
+				    sizeof(conf_codec));
+				*codec = conf_codec;
+			} else
+				fprintf(stderr,
+				    "%s:%d: codec: "
+				    "expected h264, hevc, or auto\n",
+				    path, lineno);
 		} else {
 			fprintf(stderr, "%s:%d: unknown key '%s'\n",
 			    path, lineno, key);
@@ -197,11 +213,14 @@ main(int argc, char *argv[])
 {
 	const char	*host = NULL;
 	const char	*audiodev = "snd/mon";
+	const char	*codec = "auto";
 	int		 screen = 0;
 	int		 transcode = 0;
 	int		 discover = 0;
+	int		 query = 0;
 	int		 port = 0;
 	int		 bitrate = 2000;
+	int		 vcodec = VCODEC_H264;
 	int		 ch;
 	int		 fileidx;
 	upnp_ctx_t	 upnp;
@@ -209,9 +228,9 @@ main(int argc, char *argv[])
 	media_ctx_t	 media;
 	char		 media_url[256];
 
-	load_config(&host, &audiodev, &port, &bitrate, &transcode);
+	load_config(&host, &audiodev, &port, &bitrate, &transcode, &codec);
 
-	while ((ch = getopt(argc, argv, "a:b:h:sp:dvt")) != -1) {
+	while ((ch = getopt(argc, argv, "a:b:c:h:sp:dqvt")) != -1) {
 		switch (ch) {
 		case 'a':
 			audiodev = optarg;
@@ -221,6 +240,16 @@ main(int argc, char *argv[])
 			if (bitrate <= 0) {
 				fprintf(stderr, "Invalid bitrate: %s\n",
 				    optarg);
+				usage();
+			}
+			break;
+		case 'c':
+			codec = optarg;
+			if (strcmp(codec, "h264") != 0 &&
+			    strcmp(codec, "hevc") != 0 &&
+			    strcmp(codec, "auto") != 0) {
+				fprintf(stderr, "Invalid codec: %s "
+				    "(use h264, hevc, or auto)\n", codec);
 				usage();
 			}
 			break;
@@ -235,6 +264,9 @@ main(int argc, char *argv[])
 			break;
 		case 'd':
 			discover = 1;
+			break;
+		case 'q':
+			query = 1;
 			break;
 		case 't':
 			transcode = 1;
@@ -255,6 +287,19 @@ main(int argc, char *argv[])
 		return 0;
 	}
 
+	/* Query mode: show TV capabilities and exit */
+	if (query) {
+		if (host == NULL) {
+			fprintf(stderr, "-q requires -h host\n");
+			usage();
+		}
+		memset(&upnp, 0, sizeof(upnp));
+		strlcpy(upnp.tv_ip, host, sizeof(upnp.tv_ip));
+		if (upnp_find_transport(&upnp) < 0)
+			return 1;
+		return upnp_query_capabilities(&upnp, 1, NULL, 0) < 0;
+	}
+
 	/* Validate arguments */
 	if (host == NULL)
 		usage();
@@ -263,8 +308,15 @@ main(int argc, char *argv[])
 	if (argc > 0 && screen)
 		usage();
 
-	DPRINTF("host=%s, files=%d, screen=%d, port=%d\n",
-	    host ? host : "(null)", argc, screen, port);
+	/* Resolve transcode video codec */
+	if (strcmp(codec, "hevc") == 0)
+		vcodec = VCODEC_HEVC;
+	else if (strcmp(codec, "h264") == 0)
+		vcodec = VCODEC_H264;
+	/* else "auto": try to query TV, default to h264 */
+
+	DPRINTF("host=%s, files=%d, screen=%d, port=%d, codec=%s\n",
+	    host ? host : "(null)", argc, screen, port, codec);
 
 	/* Set up signal handlers */
 	signal(SIGINT, sighandler);
@@ -281,6 +333,7 @@ main(int argc, char *argv[])
 	media.pipe_rd = -1;
 	media.pipe_wr = -1;
 	media.bitrate = bitrate;
+	media.vcodec = vcodec;
 	media.sndio_device = audiodev;
 
 	/*
@@ -289,6 +342,39 @@ main(int argc, char *argv[])
 	if (screen) {
 		media.mode = MODE_SCREEN;
 		media.running = 1;
+
+		if (upnp_get_local_ip(&upnp) < 0) {
+			fprintf(stderr, "Cannot determine local IP\n");
+			return 1;
+		}
+		printf("Local IP: %s\n", upnp.local_ip);
+
+		/* Find TV before setting up capture (need codec info) */
+		printf("Connecting to TV at %s...\n", upnp.tv_ip);
+		if (upnp_find_transport(&upnp) < 0)
+			return 1;
+		printf("AVTransport: %s:%d%s\n", upnp.tv_ip,
+		    upnp.tv_port, upnp.control_url);
+
+		/* Auto-detect best transcode codec for screen mode */
+		if (strcmp(codec, "auto") == 0) {
+			char detected[32] = "";
+
+			if (upnp_query_capabilities(&upnp, 0, detected,
+			    sizeof(detected)) == 0 &&
+			    detected[0] != '\0') {
+				if (strcmp(detected, "hevc") == 0)
+					media.vcodec = VCODEC_HEVC;
+				else
+					media.vcodec = VCODEC_H264;
+				DPRINTF("auto-detected transcode codec: "
+				    "%s\n", detected);
+			}
+		}
+
+		if (!running)
+			return 1;
+
 		printf("Setting up screen capture...\n");
 		if (media_open_screen(&media) < 0) {
 			fprintf(stderr, "Failed to set up screen capture\n");
@@ -299,13 +385,6 @@ main(int argc, char *argv[])
 			media_close(&media);
 			return 1;
 		}
-
-		if (upnp_get_local_ip(&upnp) < 0) {
-			fprintf(stderr, "Cannot determine local IP\n");
-			media_close(&media);
-			return 1;
-		}
-		printf("Local IP: %s\n", upnp.local_ip);
 
 		if (httpd_start(&httpd, &media, port) < 0) {
 			fprintf(stderr, "Failed to start HTTP server\n");
@@ -327,15 +406,6 @@ main(int argc, char *argv[])
 			media_close(&media);
 			return 1;
 		}
-
-		if (!running)
-			goto screen_shutdown;
-
-		printf("Connecting to TV at %s...\n", upnp.tv_ip);
-		if (upnp_find_transport(&upnp) < 0)
-			goto screen_shutdown;
-		printf("AVTransport: %s:%d%s\n", upnp.tv_ip,
-		    upnp.tv_port, upnp.control_url);
 
 		if (!running)
 			goto screen_shutdown;
@@ -430,6 +500,21 @@ main(int argc, char *argv[])
 	printf("AVTransport: %s:%d%s\n", upnp.tv_ip,
 	    upnp.tv_port, upnp.control_url);
 
+	/* Auto-detect best transcode codec from TV capabilities */
+	if (strcmp(codec, "auto") == 0) {
+		char detected[32] = "";
+
+		if (upnp_query_capabilities(&upnp, 0, detected,
+		    sizeof(detected)) == 0 && detected[0] != '\0') {
+			if (strcmp(detected, "hevc") == 0)
+				vcodec = VCODEC_HEVC;
+			else
+				vcodec = VCODEC_H264;
+			DPRINTF("auto-detected transcode codec: %s\n",
+			    detected);
+		}
+	}
+
 	/* Per-file loop */
 	for (fileidx = 0; fileidx < argc && running; fileidx++) {
 		const char *file = argv[fileidx];
@@ -443,6 +528,7 @@ main(int argc, char *argv[])
 		media.pipe_rd = -1;
 		media.pipe_wr = -1;
 		media.bitrate = bitrate;
+		media.vcodec = vcodec;
 
 		printf("\n[%d/%d] %s\n", fileidx + 1, argc, file);
 

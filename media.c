@@ -336,8 +336,14 @@ media_probe(media_ctx_t *ctx, const char *filepath, int force_transcode)
 	} else {
 		strlcpy(ctx->mime_type, "video/mp2t",
 		    sizeof(ctx->mime_type));
-		strlcpy(ctx->dlna_profile, "AVC_TS_HP_HD_AAC_MULT5",
-		    sizeof(ctx->dlna_profile));
+		if (ctx->vcodec == VCODEC_HEVC)
+			strlcpy(ctx->dlna_profile,
+			    "HEVC_TS_HD_NA",
+			    sizeof(ctx->dlna_profile));
+		else
+			strlcpy(ctx->dlna_profile,
+			    "AVC_TS_HP_HD_AAC_MULT5",
+			    sizeof(ctx->dlna_profile));
 	}
 
 	DPRINTF("media: needs_transcode=%d, mime=%s\n",
@@ -591,6 +597,7 @@ init_output(media_ctx_t *ctx, int has_video, int has_audio)
 
 /*
  * Set up video encoder (VAAPI or software fallback).
+ * Supports H.264 and HEVC based on ctx->vcodec.
  */
 static int
 init_video_encoder(media_ctx_t *ctx, int width, int height,
@@ -598,17 +605,22 @@ init_video_encoder(media_ctx_t *ctx, int width, int height,
 {
 	const AVCodec	*codec;
 	int		 ret;
+	int		 is_hevc = (ctx->vcodec == VCODEC_HEVC);
 
 	if (use_vaapi)
-		codec = avcodec_find_encoder_by_name("h264_vaapi");
+		codec = avcodec_find_encoder_by_name(
+		    is_hevc ? "hevc_vaapi" : "h264_vaapi");
 	else
-		codec = avcodec_find_encoder_by_name("libx264");
+		codec = avcodec_find_encoder_by_name(
+		    is_hevc ? "libx265" : "libx264");
 
 	if (codec == NULL) {
-		/* Try generic H.264 encoder */
-		codec = avcodec_find_encoder(AV_CODEC_ID_H264);
+		/* Try generic encoder */
+		codec = avcodec_find_encoder(
+		    is_hevc ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264);
 		if (codec == NULL) {
-			fprintf(stderr, "No H.264 encoder found\n");
+			fprintf(stderr, "No %s encoder found\n",
+			    is_hevc ? "HEVC" : "H.264");
 			return -1;
 		}
 	}
@@ -655,8 +667,13 @@ init_video_encoder(media_ctx_t *ctx, int width, int height,
 		ctx->video_enc->bit_rate = (int64_t)ctx->bitrate * 1000;
 		ctx->video_enc->rc_max_rate = (int64_t)ctx->bitrate * 1000;
 		ctx->video_enc->rc_buffer_size = ctx->bitrate * 1000;
-		ctx->video_enc->profile = AV_PROFILE_H264_HIGH;
-		ctx->video_enc->level = 41;
+		if (is_hevc) {
+			ctx->video_enc->profile = AV_PROFILE_HEVC_MAIN;
+			ctx->video_enc->level = 153; /* Level 5.1 */
+		} else {
+			ctx->video_enc->profile = AV_PROFILE_H264_HIGH;
+			ctx->video_enc->level = 41;
+		}
 		/* Minimize hardware encoder pipeline depth */
 		av_opt_set_int(ctx->video_enc->priv_data,
 		    "async_depth", 1, 0);
@@ -665,17 +682,25 @@ init_video_encoder(media_ctx_t *ctx, int width, int height,
 		ctx->video_enc->bit_rate = (int64_t)ctx->bitrate * 1000;
 		ctx->video_enc->rc_max_rate = (int64_t)ctx->bitrate * 1000;
 		ctx->video_enc->rc_buffer_size = ctx->bitrate * 1000;
-		av_opt_set(ctx->video_enc->priv_data, "preset",
-		    "ultrafast", 0);
-		av_opt_set(ctx->video_enc->priv_data, "tune",
-		    "zerolatency", 0);
-		av_opt_set(ctx->video_enc->priv_data, "refs", "1", 0);
-		av_opt_set(ctx->video_enc->priv_data, "nal-hrd",
-		    "cbr", 0);
-		ctx->video_enc->profile = AV_PROFILE_H264_HIGH;
-		ctx->video_enc->level = 41;
-		av_opt_set(ctx->video_enc->priv_data, "profile",
-		    "high", 0);
+		if (is_hevc) {
+			av_opt_set(ctx->video_enc->priv_data, "preset",
+			    "ultrafast", 0);
+			av_opt_set(ctx->video_enc->priv_data, "tune",
+			    "zerolatency", 0);
+		} else {
+			av_opt_set(ctx->video_enc->priv_data, "preset",
+			    "ultrafast", 0);
+			av_opt_set(ctx->video_enc->priv_data, "tune",
+			    "zerolatency", 0);
+			av_opt_set(ctx->video_enc->priv_data, "refs",
+			    "1", 0);
+			av_opt_set(ctx->video_enc->priv_data, "nal-hrd",
+			    "cbr", 0);
+			ctx->video_enc->profile = AV_PROFILE_H264_HIGH;
+			ctx->video_enc->level = 41;
+			av_opt_set(ctx->video_enc->priv_data, "profile",
+			    "high", 0);
+		}
 	}
 
 	ret = avcodec_open2(ctx->video_enc, codec, NULL);
@@ -1128,8 +1153,12 @@ media_open_screen(media_ctx_t *ctx)
 
 	ctx->needs_transcode = 1;
 	strlcpy(ctx->mime_type, "video/mp2t", sizeof(ctx->mime_type));
-	strlcpy(ctx->dlna_profile, "AVC_TS_HP_HD_AAC_MULT5",
-	    sizeof(ctx->dlna_profile));
+	if (ctx->vcodec == VCODEC_HEVC)
+		strlcpy(ctx->dlna_profile, "HEVC_TS_HD_NA",
+		    sizeof(ctx->dlna_profile));
+	else
+		strlcpy(ctx->dlna_profile, "AVC_TS_HP_HD_AAC_MULT5",
+		    sizeof(ctx->dlna_profile));
 
 	return 0;
 }

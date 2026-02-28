@@ -837,6 +837,22 @@ TEST(dlna_transcode_profile_matches_encoder)
 }
 
 /*
+ * HEVC transcode profile must be HEVC_TS_HD_NA.
+ */
+TEST(dlna_transcode_profile_hevc)
+{
+	media_ctx_t m = {0};
+
+	m.needs_transcode = 1;
+	m.vcodec = VCODEC_HEVC;
+	strlcpy(m.mime_type, "video/mp2t", sizeof(m.mime_type));
+	strlcpy(m.dlna_profile, "HEVC_TS_HD_NA",
+	    sizeof(m.dlna_profile));
+	ASSERT(strstr(m.dlna_profile, "HEVC") != NULL);
+	ASSERT(strstr(m.dlna_profile, "TS") != NULL);
+}
+
+/*
  * Transcode MIME type must be video/mp2t (MPEG transport stream).
  */
 TEST(dlna_transcode_mime_type)
@@ -885,6 +901,19 @@ TEST(dlna_features_no_colons_no_profile)
 }
 
 /*
+ * HEVC streaming features string.
+ */
+TEST(dlna_features_hevc_streaming)
+{
+	char buf[256];
+
+	build_dlna_features(buf, sizeof(buf), "HEVC_TS_HD_NA", 1);
+	ASSERT(strstr(buf, "DLNA.ORG_PN=HEVC_TS_HD_NA") != NULL);
+	ASSERT(strstr(buf, "DLNA.ORG_OP=00") != NULL);
+	ASSERT(strstr(buf, "DLNA.ORG_CI=1") != NULL);
+}
+
+/*
  * DLNA spec: the direct-play MPEG-TS profile should be Main Profile SD
  * (for passthrough files), while the transcode profile should be High
  * Profile HD (since the encoder uses AV_PROFILE_H264_HIGH).
@@ -899,6 +928,22 @@ TEST(dlna_mpegts_direct_vs_transcode)
 
 	/* Transcode uses AVC_TS_HP_HD_AAC_MULT5 (set by media_probe) */
 	ASSERT(strcmp(direct.dlna_profile, "AVC_TS_HP_HD_AAC_MULT5") != 0);
+}
+
+/* ------------------------------------------------------------------ */
+/* Tests: vcodec enum                                                 */
+/* ------------------------------------------------------------------ */
+
+TEST(vcodec_default_is_h264)
+{
+	media_ctx_t m = {0};
+
+	ASSERT_INT_EQ(m.vcodec, VCODEC_H264);
+}
+
+TEST(vcodec_hevc_value)
+{
+	ASSERT_INT_EQ(VCODEC_HEVC, 1);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1159,11 +1204,17 @@ main(void)
 	RUN_TEST(dlna_features_field_order);
 	RUN_TEST(dlna_features_field_order_no_profile);
 	RUN_TEST(dlna_transcode_profile_matches_encoder);
+	RUN_TEST(dlna_transcode_profile_hevc);
 	RUN_TEST(dlna_transcode_mime_type);
 	RUN_TEST(dlna_screen_capture_profile);
 	RUN_TEST(dlna_features_no_colons);
 	RUN_TEST(dlna_features_no_colons_no_profile);
+	RUN_TEST(dlna_features_hevc_streaming);
 	RUN_TEST(dlna_mpegts_direct_vs_transcode);
+
+	printf("\nvcodec:\n");
+	RUN_TEST(vcodec_default_is_h264);
+	RUN_TEST(vcodec_hevc_value);
 
 	printf("\nxml_extract:\n");
 	RUN_TEST(xml_extract_basic);
