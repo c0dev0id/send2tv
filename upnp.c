@@ -925,14 +925,14 @@ upnp_query_capabilities(upnp_ctx_t *ctx, int print, char *best_codec,
 
 	/*
 	 * Choose the best transcode target codec.
-	 * Prefer HEVC for better quality at lower bitrates,
-	 * then H.264 as the safe universal fallback.
+	 * Prefer H.264 as the safe universal DLNA codec,
+	 * fall back to HEVC if H.264 is not advertised.
 	 */
 	if (best_codec != NULL) {
-		if (has_hevc)
-			strlcpy(best_codec, "hevc", best_codec_sz);
-		else if (has_h264)
+		if (has_h264)
 			strlcpy(best_codec, "h264", best_codec_sz);
+		else if (has_hevc)
+			strlcpy(best_codec, "hevc", best_codec_sz);
 		else
 			strlcpy(best_codec, "h264", best_codec_sz);
 
