@@ -988,14 +988,14 @@ media_open_screen(media_ctx_t *ctx)
 		av_dict_set(&opts, "sample_rate", "48000", 0);
 		av_dict_set(&opts, "channels", "2", 0);
 		ret = avformat_open_input(&ctx->sndio_ctx,
-		    ctx->sndio_device ? ctx->sndio_device : "snd/default.mon",
+		    ctx->sndio_device ? ctx->sndio_device : "snd/mon",
 		    sndio_fmt, &opts);
 		av_dict_free(&opts);
 		if (ret < 0) {
 			fprintf(stderr, "Cannot open sndio monitor '%s': %s "
 			    "(continuing without audio)\n",
 			    ctx->sndio_device ? ctx->sndio_device :
-			    "snd/default.mon", av_err2str(ret));
+			    "snd/mon", av_err2str(ret));
 			ctx->sndio_ctx = NULL;
 		} else {
 			ctx->sndio_ctx->interrupt_callback.callback =

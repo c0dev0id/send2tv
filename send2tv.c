@@ -57,7 +57,7 @@ usage(void)
 	    "  -h host   TV IP address or hostname\n"
 	    "  -t        force transcoding\n"
 	    "  -s        stream screen and system audio\n"
-	    "  -a device sndio audio device (default: snd/default.mon)\n"
+	    "  -a device sndio audio device (default: snd/mon)\n"
 	    "  -d        discover TVs on the network\n"
 	    "  -p port   HTTP server port (default: auto)\n"
 	    "  -b kbps   video bitrate in kbps (default: 2000)\n"
@@ -84,7 +84,7 @@ int
 main(int argc, char *argv[])
 {
 	const char	*host = NULL;
-	const char	*audiodev = "snd/default.mon";
+	const char	*audiodev = "snd/mon";
 	int		 screen = 0;
 	int		 transcode = 0;
 	int		 discover = 0;
