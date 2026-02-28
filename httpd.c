@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <poll.h>
 
 #include "send2tv.h"
@@ -252,6 +253,8 @@ httpd_thread(void *arg)
 		if (client_fd < 0)
 			continue;
 
+		{ int flag = 1; setsockopt(client_fd, IPPROTO_TCP,
+		    TCP_NODELAY, &flag, sizeof(flag)); }
 		handle_request(client_fd, ctx->media);
 		close(client_fd);
 	}
