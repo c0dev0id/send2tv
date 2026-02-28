@@ -54,12 +54,52 @@ avio_write_pipe(void *opaque, uint8_t *buf, int buf_size)
 }
 
 /*
- * Check if video codec is natively supported by Samsung TVs.
+ * Check if video codec + container pair is supported by Samsung TVs.
+ * Reference: Samsung 2024 TV Video Specifications.
+ * FFmpeg format names may contain comma-separated alternatives
+ * (e.g. "matroska,webm"), so we use strstr() for matching.
  */
 static int
-video_codec_ok(enum AVCodecID id)
+video_container_ok(enum AVCodecID codec, const char *fmt)
 {
-	return id == AV_CODEC_ID_H264 || id == AV_CODEC_ID_HEVC;
+	if (fmt == NULL)
+		return 0;
+
+	switch (codec) {
+	case AV_CODEC_ID_H264:
+		return strstr(fmt, "avi") != NULL ||
+		    strstr(fmt, "matroska") != NULL ||
+		    strstr(fmt, "asf") != NULL ||
+		    strstr(fmt, "mp4") != NULL ||
+		    strstr(fmt, "mov") != NULL ||
+		    strstr(fmt, "3gp") != NULL ||
+		    strstr(fmt, "flv") != NULL ||
+		    strstr(fmt, "mpeg") != NULL;
+	case AV_CODEC_ID_HEVC:
+		/* HEVC: MKV, MP4, TS only */
+		return strstr(fmt, "matroska") != NULL ||
+		    strstr(fmt, "mp4") != NULL ||
+		    strstr(fmt, "mov") != NULL ||
+		    strstr(fmt, "mpegts") != NULL;
+	case AV_CODEC_ID_VP8:
+	case AV_CODEC_ID_VP9:
+	case AV_CODEC_ID_AV1:
+		/* VP8/VP9/AV1: WebM only */
+		return strstr(fmt, "webm") != NULL;
+	case AV_CODEC_ID_MPEG4:
+		return strstr(fmt, "avi") != NULL ||
+		    strstr(fmt, "matroska") != NULL ||
+		    strstr(fmt, "asf") != NULL ||
+		    strstr(fmt, "mp4") != NULL ||
+		    strstr(fmt, "mov") != NULL ||
+		    strstr(fmt, "3gp") != NULL ||
+		    strstr(fmt, "flv") != NULL;
+	case AV_CODEC_ID_MPEG2VIDEO:
+	case AV_CODEC_ID_MPEG1VIDEO:
+		return strstr(fmt, "mpeg") != NULL;
+	default:
+		return 0;
+	}
 }
 
 /*
@@ -76,6 +116,7 @@ audio_codec_ok(enum AVCodecID id)
 	case AV_CODEC_ID_PCM_S16BE:
 	case AV_CODEC_ID_AC3:
 	case AV_CODEC_ID_EAC3:
+	case AV_CODEC_ID_OPUS:
 	case AV_CODEC_ID_VORBIS:
 		return 1;
 	default:
@@ -103,22 +144,40 @@ container_ok(const char *name)
 }
 
 /*
- * Determine MIME type from format name.
+ * Determine MIME type from format name and video codec.
+ * vid_codec is needed to distinguish MKV from WebM since FFmpeg
+ * reports both as "matroska,webm".
  */
 static void
-set_mime_type(media_ctx_t *ctx, const char *fmt_name)
+set_mime_type(media_ctx_t *ctx, const char *fmt_name,
+    enum AVCodecID vid_codec)
 {
 	if (strstr(fmt_name, "mp4") || strstr(fmt_name, "mov"))
 		strlcpy(ctx->mime_type, "video/mp4",
 		    sizeof(ctx->mime_type));
-	else if (strstr(fmt_name, "matroska"))
-		strlcpy(ctx->mime_type, "video/x-mkv",
-		    sizeof(ctx->mime_type));
-	else if (strstr(fmt_name, "mpegts"))
+	else if (strstr(fmt_name, "matroska")) {
+		if (vid_codec == AV_CODEC_ID_VP8 ||
+		    vid_codec == AV_CODEC_ID_VP9 ||
+		    vid_codec == AV_CODEC_ID_AV1)
+			strlcpy(ctx->mime_type, "video/webm",
+			    sizeof(ctx->mime_type));
+		else
+			strlcpy(ctx->mime_type, "video/x-mkv",
+			    sizeof(ctx->mime_type));
+	} else if (strstr(fmt_name, "mpegts"))
 		strlcpy(ctx->mime_type, "video/mp2t",
+		    sizeof(ctx->mime_type));
+	else if (strstr(fmt_name, "mpeg"))
+		strlcpy(ctx->mime_type, "video/mpeg",
 		    sizeof(ctx->mime_type));
 	else if (strstr(fmt_name, "avi"))
 		strlcpy(ctx->mime_type, "video/avi",
+		    sizeof(ctx->mime_type));
+	else if (strstr(fmt_name, "asf"))
+		strlcpy(ctx->mime_type, "video/x-ms-wmv",
+		    sizeof(ctx->mime_type));
+	else if (strstr(fmt_name, "flv"))
+		strlcpy(ctx->mime_type, "video/x-flv",
 		    sizeof(ctx->mime_type));
 	else if (strstr(fmt_name, "mp3"))
 		strlcpy(ctx->mime_type, "audio/mpeg",
@@ -181,9 +240,9 @@ media_probe(media_ctx_t *ctx, const char *filepath)
 
 	/* Determine if transcoding is needed */
 	if (has_video) {
-		ctx->needs_transcode = !(video_codec_ok(vid_codec) &&
-		    (ctx->audio_idx < 0 || audio_codec_ok(aud_codec)) &&
-		    container_ok(fmt_name));
+		ctx->needs_transcode = !(video_container_ok(vid_codec,
+		    fmt_name) &&
+		    (ctx->audio_idx < 0 || audio_codec_ok(aud_codec)));
 	} else {
 		/* Audio-only */
 		ctx->needs_transcode = !(audio_codec_ok(aud_codec) &&
@@ -195,7 +254,7 @@ media_probe(media_ctx_t *ctx, const char *filepath)
 	    aud_codec != AV_CODEC_ID_NONE ? avcodec_get_name(aud_codec) : "none");
 
 	if (!ctx->needs_transcode)
-		set_mime_type(ctx, fmt_name);
+		set_mime_type(ctx, fmt_name, vid_codec);
 	else
 		strlcpy(ctx->mime_type, "video/mp2t",
 		    sizeof(ctx->mime_type));
