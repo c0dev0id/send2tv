@@ -1375,6 +1375,7 @@ media_transcode_thread(void *arg)
 
 	close(ctx->pipe_wr);
 	ctx->pipe_wr = -1;
+	ctx->running = 0;
 
 	DPRINTF("media: transcode thread finished\n");
 	return NULL;
