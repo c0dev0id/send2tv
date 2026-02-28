@@ -11,7 +11,11 @@
  * Custom AVIO write callback: writes encoded data to a pipe fd.
  */
 static int
+#if LIBAVFORMAT_VERSION_MAJOR >= 61
+avio_write_pipe(void *opaque, const uint8_t *buf, int buf_size)
+#else
 avio_write_pipe(void *opaque, uint8_t *buf, int buf_size)
+#endif
 {
 	int	 fd = *(int *)opaque;
 	int	 total = 0;
@@ -241,9 +245,11 @@ init_video_filters(media_ctx_t *ctx, int width, int height,
 		goto fail;
 
 	if (use_vaapi) {
-		/* Attach hw device to filter graph */
+#if LIBAVFILTER_VERSION_MAJOR < 10
+		/* Attach hw device to filter graph (old API) */
 		ctx->filter_graph->hw_device_ctx =
 		    av_buffer_ref(ctx->hw_device_ctx);
+#endif
 
 		snprintf(filter_descr, sizeof(filter_descr),
 		    "format=nv12,hwupload,scale_vaapi=format=nv12");
@@ -271,6 +277,15 @@ init_video_filters(media_ctx_t *ctx, int width, int height,
 	    &inputs, &outputs, NULL);
 	if (ret < 0)
 		goto fail;
+
+#if LIBAVFILTER_VERSION_MAJOR >= 10
+	if (use_vaapi) {
+		for (unsigned i = 0; i < ctx->filter_graph->nb_filters; i++) {
+			ctx->filter_graph->filters[i]->hw_device_ctx =
+			    av_buffer_ref(ctx->hw_device_ctx);
+		}
+	}
+#endif
 
 	ret = avfilter_graph_config(ctx->filter_graph, NULL);
 	if (ret < 0)
@@ -456,8 +471,21 @@ init_audio_encoder(media_ctx_t *ctx, int sample_rate, int channels)
 		return -1;
 
 	ctx->audio_enc->sample_rate = sample_rate;
+#if LIBAVCODEC_VERSION_MAJOR >= 61
+	{
+		const enum AVSampleFormat *sample_fmts = NULL;
+		int nb_sample_fmts = 0;
+		ret = avcodec_get_supported_config(ctx->audio_enc, codec,
+		    AV_CODEC_CONFIG_SAMPLE_FORMAT, 0,
+		    (const void **)&sample_fmts, &nb_sample_fmts);
+		ctx->audio_enc->sample_fmt = (ret >= 0 && sample_fmts &&
+		    nb_sample_fmts > 0) ? sample_fmts[0] :
+		    AV_SAMPLE_FMT_FLTP;
+	}
+#else
 	ctx->audio_enc->sample_fmt = codec->sample_fmts ?
 	    codec->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
+#endif
 	ctx->audio_enc->bit_rate = 128000;
 	ctx->audio_enc->time_base = (AVRational){1, sample_rate};
 
