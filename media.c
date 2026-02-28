@@ -1154,7 +1154,7 @@ media_open_screen(media_ctx_t *ctx)
 	if (ctx->vcodec == VCODEC_HEVC)
 		ctx->dlna_profile[0] = '\0';
 	else
-		strlcpy(ctx->dlna_profile, "AVC_TS_MP_HD_AAC_MULT5",
+		strlcpy(ctx->dlna_profile, "AVC_TS_HP_HD_AAC_MULT5",
 		    sizeof(ctx->dlna_profile));
 
 	return 0;
