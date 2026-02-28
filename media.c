@@ -242,12 +242,8 @@ init_video_filters(media_ctx_t *ctx, int width, int height,
 
 	if (use_vaapi) {
 		/* Attach hw device to filter graph */
-		unsigned int i;
-
-		for (i = 0; i < ctx->filter_graph->nb_filters; i++) {
-			ctx->filter_graph->filters[i]->hw_device_ctx =
-			    av_buffer_ref(ctx->hw_device_ctx);
-		}
+		ctx->filter_graph->hw_device_ctx =
+		    av_buffer_ref(ctx->hw_device_ctx);
 
 		snprintf(filter_descr, sizeof(filter_descr),
 		    "format=nv12,hwupload,scale_vaapi=format=nv12");
@@ -275,16 +271,6 @@ init_video_filters(media_ctx_t *ctx, int width, int height,
 	    &inputs, &outputs, NULL);
 	if (ret < 0)
 		goto fail;
-
-	/* Set hw device context on filters that need it */
-	if (use_vaapi) {
-		unsigned int i;
-		for (i = 0; i < ctx->filter_graph->nb_filters; i++) {
-			if (ctx->filter_graph->filters[i]->hw_device_ctx == NULL)
-				ctx->filter_graph->filters[i]->hw_device_ctx =
-				    av_buffer_ref(ctx->hw_device_ctx);
-		}
-	}
 
 	ret = avfilter_graph_config(ctx->filter_graph, NULL);
 	if (ret < 0)
