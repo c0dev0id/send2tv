@@ -246,9 +246,7 @@ init_video_filters(media_ctx_t *ctx, int width, int height,
     AVRational time_base, enum AVPixelFormat pix_fmt, int use_vaapi)
 {
 	char			 args[512];
-	char			 filter_descr[256];
 	const AVFilter		*buffersrc, *buffersink;
-	AVFilterInOut		*inputs = NULL, *outputs = NULL;
 	int			 ret;
 
 	ctx->filter_graph = avfilter_graph_alloc();
@@ -273,61 +271,101 @@ init_video_filters(media_ctx_t *ctx, int width, int height,
 		goto fail;
 
 	if (use_vaapi) {
-#if LIBAVFILTER_VERSION_MAJOR < 10
-		/* Attach hw device to filter graph (old API) */
-		ctx->filter_graph->hw_device_ctx =
+		AVFilterContext *fmt_ctx, *hwup_ctx, *scale_ctx;
+		const AVFilter  *fmt_f, *hwup_f, *scale_f;
+
+		fmt_f   = avfilter_get_by_name("format");
+		hwup_f  = avfilter_get_by_name("hwupload");
+		scale_f = avfilter_get_by_name("scale_vaapi");
+		if (!fmt_f || !hwup_f || !scale_f)
+			goto fail;
+
+		DPRINTF("media: filter graph: "
+		    "format=nv12,hwupload,scale_vaapi=format=nv12\n");
+
+		/*
+		 * Build VAAPI filter chain manually so we can set
+		 * hw_device_ctx before filter init.  FFmpeg >= 8.0
+		 * validates hw_device_ctx inside hwupload_init(),
+		 * which avfilter_graph_parse_ptr() calls internally,
+		 * so the old post-parse assignment was too late.
+		 */
+		fmt_ctx = avfilter_graph_alloc_filter(ctx->filter_graph,
+		    fmt_f, "format");
+		hwup_ctx = avfilter_graph_alloc_filter(ctx->filter_graph,
+		    hwup_f, "hwupload");
+		scale_ctx = avfilter_graph_alloc_filter(ctx->filter_graph,
+		    scale_f, "scale_vaapi");
+		if (!fmt_ctx || !hwup_ctx || !scale_ctx)
+			goto fail;
+
+		/* Set hw device BEFORE init */
+		hwup_ctx->hw_device_ctx =
 		    av_buffer_ref(ctx->hw_device_ctx);
-#endif
+		scale_ctx->hw_device_ctx =
+		    av_buffer_ref(ctx->hw_device_ctx);
 
-		snprintf(filter_descr, sizeof(filter_descr),
-		    "format=nv12,hwupload,scale_vaapi=format=nv12");
+		ret = avfilter_init_str(fmt_ctx, "pix_fmts=nv12");
+		if (ret < 0)
+			goto fail;
+		ret = avfilter_init_str(hwup_ctx, NULL);
+		if (ret < 0)
+			goto fail;
+		ret = avfilter_init_str(scale_ctx, "format=nv12");
+		if (ret < 0)
+			goto fail;
+
+		/* buffersrc -> format -> hwupload -> scale -> buffersink */
+		ret = avfilter_link(ctx->buffersrc_ctx, 0, fmt_ctx, 0);
+		if (ret < 0)
+			goto fail;
+		ret = avfilter_link(fmt_ctx, 0, hwup_ctx, 0);
+		if (ret < 0)
+			goto fail;
+		ret = avfilter_link(hwup_ctx, 0, scale_ctx, 0);
+		if (ret < 0)
+			goto fail;
+		ret = avfilter_link(scale_ctx, 0, ctx->buffersink_ctx, 0);
+		if (ret < 0)
+			goto fail;
 	} else {
-		snprintf(filter_descr, sizeof(filter_descr),
-		    "format=yuv420p");
-	}
+		AVFilterInOut *inputs, *outputs;
 
-	DPRINTF("media: filter graph: %s\n", filter_descr);
+		DPRINTF("media: filter graph: format=yuv420p\n");
 
-	inputs = avfilter_inout_alloc();
-	outputs = avfilter_inout_alloc();
-	if (inputs == NULL || outputs == NULL)
-		goto fail;
-
-	outputs->name = av_strdup("in");
-	outputs->filter_ctx = ctx->buffersrc_ctx;
-	outputs->pad_idx = 0;
-	outputs->next = NULL;
-
-	inputs->name = av_strdup("out");
-	inputs->filter_ctx = ctx->buffersink_ctx;
-	inputs->pad_idx = 0;
-	inputs->next = NULL;
-
-	ret = avfilter_graph_parse_ptr(ctx->filter_graph, filter_descr,
-	    &inputs, &outputs, NULL);
-	if (ret < 0)
-		goto fail;
-
-#if LIBAVFILTER_VERSION_MAJOR >= 10
-	if (use_vaapi) {
-		for (unsigned i = 0; i < ctx->filter_graph->nb_filters; i++) {
-			ctx->filter_graph->filters[i]->hw_device_ctx =
-			    av_buffer_ref(ctx->hw_device_ctx);
+		inputs = avfilter_inout_alloc();
+		outputs = avfilter_inout_alloc();
+		if (inputs == NULL || outputs == NULL) {
+			avfilter_inout_free(&inputs);
+			avfilter_inout_free(&outputs);
+			goto fail;
 		}
+
+		outputs->name = av_strdup("in");
+		outputs->filter_ctx = ctx->buffersrc_ctx;
+		outputs->pad_idx = 0;
+		outputs->next = NULL;
+
+		inputs->name = av_strdup("out");
+		inputs->filter_ctx = ctx->buffersink_ctx;
+		inputs->pad_idx = 0;
+		inputs->next = NULL;
+
+		ret = avfilter_graph_parse_ptr(ctx->filter_graph,
+		    "format=yuv420p", &inputs, &outputs, NULL);
+		avfilter_inout_free(&inputs);
+		avfilter_inout_free(&outputs);
+		if (ret < 0)
+			goto fail;
 	}
-#endif
 
 	ret = avfilter_graph_config(ctx->filter_graph, NULL);
 	if (ret < 0)
 		goto fail;
 
-	avfilter_inout_free(&inputs);
-	avfilter_inout_free(&outputs);
 	return 0;
 
 fail:
-	avfilter_inout_free(&inputs);
-	avfilter_inout_free(&outputs);
 	avfilter_graph_free(&ctx->filter_graph);
 	ctx->filter_graph = NULL;
 	return -1;
