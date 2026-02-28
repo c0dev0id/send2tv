@@ -927,6 +927,11 @@ media_open_screen(media_ctx_t *ctx)
 	ctx->ifmt_ctx->interrupt_callback.callback = ffmpeg_interrupt_cb;
 	ctx->ifmt_ctx->interrupt_callback.opaque = ctx;
 
+	/* Default probesize (5MB) is too small for high-resolution raw
+	 * frames (e.g. 2880x1800 BGRA ~ 20MB/frame). Increase so
+	 * avformat_find_stream_info can read enough to estimate rate. */
+	ctx->ifmt_ctx->probesize = 50 * 1024 * 1024;
+
 	ret = avformat_find_stream_info(ctx->ifmt_ctx, NULL);
 	if (ret < 0) {
 		fprintf(stderr, "Cannot get x11grab stream info: %s\n",
