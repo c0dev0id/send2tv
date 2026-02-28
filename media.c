@@ -976,16 +976,44 @@ media_open_screen(media_ctx_t *ctx)
 			ctx->sndio_ctx->interrupt_callback.callback =
 			    ffmpeg_interrupt_cb;
 			ctx->sndio_ctx->interrupt_callback.opaque = ctx;
-			avformat_find_stream_info(ctx->sndio_ctx, NULL);
+			ret = avformat_find_stream_info(ctx->sndio_ctx,
+			    NULL);
+			if (ret < 0 ||
+			    ctx->sndio_ctx->nb_streams < 1) {
+				fprintf(stderr, "Cannot get sndio "
+				    "stream info "
+				    "(continuing without audio)\n");
+				avformat_close_input(&ctx->sndio_ctx);
+				ctx->sndio_ctx = NULL;
+			}
+		}
+		if (ctx->sndio_ctx != NULL) {
 			ctx->sndio_audio_idx = 0;
 			st = ctx->sndio_ctx->streams[0];
-			dec = avcodec_find_decoder(st->codecpar->codec_id);
+			dec = avcodec_find_decoder(
+			    st->codecpar->codec_id);
 			if (dec != NULL) {
 				ctx->sndio_dec =
 				    avcodec_alloc_context3(dec);
-				avcodec_parameters_to_context(
-				    ctx->sndio_dec, st->codecpar);
-				avcodec_open2(ctx->sndio_dec, dec, NULL);
+				if (ctx->sndio_dec == NULL) {
+					avformat_close_input(
+					    &ctx->sndio_ctx);
+					ctx->sndio_ctx = NULL;
+				} else {
+					avcodec_parameters_to_context(
+					    ctx->sndio_dec,
+					    st->codecpar);
+					ret = avcodec_open2(
+					    ctx->sndio_dec, dec,
+					    NULL);
+					if (ret < 0) {
+						avcodec_free_context(
+						    &ctx->sndio_dec);
+						avformat_close_input(
+						    &ctx->sndio_ctx);
+						ctx->sndio_ctx = NULL;
+					}
+				}
 			}
 		}
 	} else {
@@ -1046,6 +1074,24 @@ media_open_screen(media_ctx_t *ctx)
 		if (init_audio_encoder(ctx, 48000, 2) == 0) {
 			if (init_audio_resampler(ctx, ctx->sndio_dec) == 0)
 				has_audio = 1;
+		}
+		if (!has_audio) {
+			/*
+			 * Audio setup failed; tear down sndio so the
+			 * capture thread won't try to read from it.
+			 */
+			if (ctx->swr_ctx != NULL)
+				swr_free(&ctx->swr_ctx);
+			if (ctx->audio_fifo != NULL) {
+				av_audio_fifo_free(ctx->audio_fifo);
+				ctx->audio_fifo = NULL;
+			}
+			if (ctx->audio_enc != NULL)
+				avcodec_free_context(&ctx->audio_enc);
+			avcodec_free_context(&ctx->sndio_dec);
+			avformat_close_input(&ctx->sndio_ctx);
+			fprintf(stderr, "Audio encoder setup failed "
+			    "(continuing without audio)\n");
 		}
 	}
 
@@ -1338,7 +1384,8 @@ media_capture_thread(void *arg)
 		av_packet_unref(vid_pkt);
 
 		/* Read available audio from sndio (non-blocking-ish) */
-		if (ctx->sndio_ctx != NULL && ctx->sndio_dec != NULL) {
+		if (ctx->sndio_ctx != NULL && ctx->sndio_dec != NULL &&
+		    ctx->audio_enc != NULL && ctx->swr_ctx != NULL) {
 			while (av_read_frame(ctx->sndio_ctx,
 			    aud_pkt) >= 0) {
 				process_audio_packet(ctx, aud_pkt,

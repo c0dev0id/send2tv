@@ -113,6 +113,8 @@ main(int argc, char *argv[])
 
 	strlcpy(upnp.tv_ip, host, sizeof(upnp.tv_ip));
 	media.running = 1;
+	media.pipe_rd = -1;
+	media.pipe_wr = -1;
 	media.sndio_device = audiodev;
 
 	if (screen) {
