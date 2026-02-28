@@ -564,7 +564,7 @@ init_video_encoder(media_ctx_t *ctx, int width, int height,
 		    av_buffer_ref(hw_frames_ref);
 		av_buffer_unref(&hw_frames_ref);
 		ctx->video_enc->bit_rate = 4000000;
-		ctx->video_enc->profile = FF_PROFILE_H264_HIGH;
+		ctx->video_enc->profile = AV_PROFILE_H264_HIGH;
 		ctx->video_enc->level = 41;
 	} else {
 		ctx->video_enc->pix_fmt = AV_PIX_FMT_YUV420P;
@@ -574,7 +574,7 @@ init_video_encoder(media_ctx_t *ctx, int width, int height,
 		av_opt_set(ctx->video_enc->priv_data, "tune",
 		    "zerolatency", 0);
 		av_opt_set(ctx->video_enc->priv_data, "refs", "3", 0);
-		ctx->video_enc->profile = FF_PROFILE_H264_HIGH;
+		ctx->video_enc->profile = AV_PROFILE_H264_HIGH;
 		ctx->video_enc->level = 41;
 		av_opt_set(ctx->video_enc->priv_data, "profile",
 		    "high", 0);
