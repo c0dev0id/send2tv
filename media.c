@@ -873,13 +873,15 @@ media_open_screen(media_ctx_t *ctx)
 		opts = NULL;
 		av_dict_set(&opts, "sample_rate", "48000", 0);
 		av_dict_set(&opts, "channels", "2", 0);
-		ret = avformat_open_input(&ctx->sndio_ctx, "snd/0.mon",
+		ret = avformat_open_input(&ctx->sndio_ctx,
+		    ctx->sndio_device ? ctx->sndio_device : "snd/default.mon",
 		    sndio_fmt, &opts);
 		av_dict_free(&opts);
 		if (ret < 0) {
-			fprintf(stderr, "Cannot open sndio monitor: %s "
+			fprintf(stderr, "Cannot open sndio monitor '%s': %s "
 			    "(continuing without audio)\n",
-			    av_err2str(ret));
+			    ctx->sndio_device ? ctx->sndio_device :
+			    "snd/default.mon", av_err2str(ret));
 			ctx->sndio_ctx = NULL;
 		} else {
 			ctx->sndio_ctx->interrupt_callback.callback =
@@ -902,7 +904,8 @@ media_open_screen(media_ctx_t *ctx)
 		    "(continuing without audio)\n");
 	}
 
-	DPRINTF("media: sndio audio capture %s\n",
+	DPRINTF("media: sndio device '%s', capture %s\n",
+	    ctx->sndio_device ? ctx->sndio_device : "snd/default.mon",
 	    ctx->sndio_ctx ? "active" : "unavailable");
 
 	/* Init VAAPI */

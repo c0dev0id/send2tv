@@ -71,6 +71,7 @@ typedef struct {
 	AVFormatContext	*sndio_ctx;
 	int		 sndio_audio_idx;
 	AVCodecContext	*sndio_dec;
+	const char	*sndio_device;	/* sndio monitor device name */
 
 	volatile int	 running;
 	pthread_t	 thread;
