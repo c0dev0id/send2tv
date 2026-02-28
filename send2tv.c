@@ -6,21 +6,23 @@
 
 #include "send2tv.h"
 
+int verbose = 0;
 static volatile int running = 1;
 
 static void
 usage(void)
 {
 	fprintf(stderr,
-	    "usage: send2tv -h host -f file\n"
-	    "       send2tv -h host -s\n"
-	    "       send2tv -d\n"
+	    "usage: send2tv [-v] -h host -f file\n"
+	    "       send2tv [-v] -h host -s\n"
+	    "       send2tv [-v] -d\n"
 	    "\n"
 	    "  -h host   TV IP address or hostname\n"
 	    "  -f file   media file to send\n"
 	    "  -s        stream screen and system audio\n"
 	    "  -d        discover TVs on the network\n"
-	    "  -p port   HTTP server port (default: auto)\n");
+	    "  -p port   HTTP server port (default: auto)\n"
+	    "  -v        verbose/debug output\n");
 	exit(1);
 }
 
@@ -47,7 +49,7 @@ main(int argc, char *argv[])
 	media_ctx_t	 media;
 	char		 media_url[256];
 
-	while ((ch = getopt(argc, argv, "h:f:sp:d")) != -1) {
+	while ((ch = getopt(argc, argv, "h:f:sp:dv")) != -1) {
 		switch (ch) {
 		case 'h':
 			host = optarg;
@@ -63,6 +65,9 @@ main(int argc, char *argv[])
 			break;
 		case 'd':
 			discover = 1;
+			break;
+		case 'v':
+			verbose = 1;
 			break;
 		default:
 			usage();
@@ -82,6 +87,9 @@ main(int argc, char *argv[])
 		usage();
 	if (file != NULL && screen)
 		usage();
+
+	DPRINTF("host=%s, file=%s, screen=%d, port=%d\n",
+	    host ? host : "(null)", file ? file : "(null)", screen, port);
 
 	/* Set up signal handlers */
 	signal(SIGINT, sighandler);

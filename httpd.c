@@ -83,6 +83,9 @@ serve_file(int client_fd, media_ctx_t *media, int head_only,
 	ssize_t		 n;
 	off_t		 total, end;
 
+	DPRINTF("httpd: serving file %s (range=%lld)\n",
+	    media->filepath, (long long)range_start);
+
 	if (stat(media->filepath, &st) < 0) {
 		send_headers(client_fd, 404, "Not Found",
 		    "text/plain", 9, -1, -1, -1);
@@ -130,6 +133,8 @@ serve_pipe(int client_fd, media_ctx_t *media, int head_only)
 	char		 buf[SEND2TV_BUF_SIZE];
 	ssize_t		 n;
 
+	DPRINTF("httpd: serving from pipe, mime=%s\n", media->mime_type);
+
 	send_headers(client_fd, 200, "OK",
 	    media->mime_type, -1, -1, -1, -1);
 
@@ -161,6 +166,9 @@ handle_request(int client_fd, media_ctx_t *media)
 	if (n <= 0)
 		return;
 	req[n] = '\0';
+
+	DPRINTF("httpd: request %.*s\n",
+	    (int)(strchr(req, '\r') ? strchr(req, '\r') - req : n), req);
 
 	/* Parse method */
 	if (strncmp(req, "HEAD ", 5) == 0)
@@ -275,6 +283,8 @@ httpd_start(httpd_ctx_t *ctx, media_ctx_t *media, int port)
 	addr_len = sizeof(addr);
 	getsockname(ctx->listen_fd, (struct sockaddr *)&addr, &addr_len);
 	ctx->port = ntohs(addr.sin_port);
+
+	DPRINTF("httpd: listening on port %d\n", ctx->port);
 
 	if (pthread_create(&ctx->thread, NULL, httpd_thread, ctx) != 0) {
 		perror("pthread_create");
