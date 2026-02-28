@@ -17,7 +17,14 @@ send2tv: ${OBJ}
 .c.o:
 	${CC} ${CFLAGS} -c $<
 
-clean:
-	rm -f send2tv ${OBJ}
+tests: tests.c media.c upnp.c send2tv.h
+	${CC} -Wall -Wextra -O2 -I ffmpeg-8.0.1 -o tests tests.c \
+	    -lpthread -Wl,--unresolved-symbols=ignore-all
 
-.PHONY: clean
+test: tests
+	./tests
+
+clean:
+	rm -f send2tv tests ${OBJ}
+
+.PHONY: clean test
