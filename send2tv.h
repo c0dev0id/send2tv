@@ -7,7 +7,6 @@
 
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
-#include <libavcodec/defs.h>		/* FF_PROFILE_* */
 #include <libavutil/avutil.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/opt.h>
