@@ -199,7 +199,7 @@ set_mime_type(media_ctx_t *ctx, const char *fmt_name,
 			strlcpy(ctx->mime_type, "video/x-mkv",
 			    sizeof(ctx->mime_type));
 	} else if (strstr(fmt_name, "mpegts"))
-		strlcpy(ctx->mime_type, "video/mpeg",
+		strlcpy(ctx->mime_type, "video/mp2t",
 		    sizeof(ctx->mime_type));
 	else if (strstr(fmt_name, "mpeg"))
 		strlcpy(ctx->mime_type, "video/mpeg",
@@ -226,7 +226,7 @@ set_mime_type(media_ctx_t *ctx, const char *fmt_name,
 		strlcpy(ctx->mime_type, "audio/x-wav",
 		    sizeof(ctx->mime_type));
 	else
-		strlcpy(ctx->mime_type, "video/mpeg",
+		strlcpy(ctx->mime_type, "video/mp2t",
 		    sizeof(ctx->mime_type));
 }
 
@@ -334,7 +334,7 @@ media_probe(media_ctx_t *ctx, const char *filepath, int force_transcode)
 		set_mime_type(ctx, fmt_name, vid_codec);
 		set_dlna_profile(ctx, fmt_name, vid_codec);
 	} else {
-		strlcpy(ctx->mime_type, "video/mpeg",
+		strlcpy(ctx->mime_type, "video/mp2t",
 		    sizeof(ctx->mime_type));
 		if (ctx->vcodec == VCODEC_HEVC)
 			ctx->dlna_profile[0] = '\0';
@@ -927,7 +927,7 @@ media_open_transcode(media_ctx_t *ctx)
 	if (init_output(ctx, ctx->video_idx >= 0, has_audio) < 0)
 		return -1;
 
-	strlcpy(ctx->mime_type, "video/mpeg", sizeof(ctx->mime_type));
+	strlcpy(ctx->mime_type, "video/mp2t", sizeof(ctx->mime_type));
 
 	return 0;
 }
@@ -1150,7 +1150,7 @@ media_open_screen(media_ctx_t *ctx)
 		return -1;
 
 	ctx->needs_transcode = 1;
-	strlcpy(ctx->mime_type, "video/mpeg", sizeof(ctx->mime_type));
+	strlcpy(ctx->mime_type, "video/mp2t", sizeof(ctx->mime_type));
 	if (ctx->vcodec == VCODEC_HEVC)
 		ctx->dlna_profile[0] = '\0';
 	else
