@@ -1272,9 +1272,14 @@ process_audio_packet(media_ctx_t *ctx, AVPacket *pkt,
 		    (const uint8_t **)frame->data, frame->nb_samples);
 
 		if (out_samples > 0) {
-			av_audio_fifo_realloc(ctx->audio_fifo,
+			if (av_audio_fifo_realloc(ctx->audio_fifo,
 			    av_audio_fifo_size(ctx->audio_fifo) +
-			    out_samples);
+			    out_samples) < 0) {
+				av_log(NULL, AV_LOG_ERROR,
+				    "Failed to reallocate audio FIFO\n");
+				av_frame_free(&tmp_frame);
+				goto done;
+			}
 			av_audio_fifo_write(ctx->audio_fifo,
 			    (void **)tmp_frame->data, out_samples);
 		}
