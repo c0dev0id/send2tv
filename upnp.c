@@ -565,21 +565,8 @@ upnp_set_uri(upnp_ctx_t *ctx, const char *uri, const char *mime,
 		return -1;
 	}
 
-	if (dlna_profile != NULL && dlna_profile[0] != '\0')
-		snprintf(dlna_features, sizeof(dlna_features),
-		    "DLNA.ORG_PN=%s;DLNA.ORG_OP=%s;DLNA.ORG_CI=%s;"
-		    "DLNA.ORG_FLAGS="
-		    "01700000000000000000000000000000",
-		    dlna_profile,
-		    is_streaming ? "00" : "01",
-		    is_streaming ? "1" : "0");
-	else
-		snprintf(dlna_features, sizeof(dlna_features),
-		    "DLNA.ORG_OP=%s;DLNA.ORG_CI=%s;"
-		    "DLNA.ORG_FLAGS="
-		    "01700000000000000000000000000000",
-		    is_streaming ? "00" : "01",
-		    is_streaming ? "1" : "0");
+	build_dlna_features(dlna_features, sizeof(dlna_features),
+	    dlna_profile, is_streaming);
 
 	snprintf(didl, sizeof(didl),
 	    "<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\""
