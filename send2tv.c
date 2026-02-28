@@ -13,12 +13,13 @@ static void
 usage(void)
 {
 	fprintf(stderr,
-	    "usage: send2tv [-v] -h host -f file\n"
+	    "usage: send2tv [-tv] -h host -f file\n"
 	    "       send2tv [-v] -h host -s\n"
 	    "       send2tv [-v] -d\n"
 	    "\n"
 	    "  -h host   TV IP address or hostname\n"
 	    "  -f file   media file to send\n"
+	    "  -t        force transcoding\n"
 	    "  -s        stream screen and system audio\n"
 	    "  -d        discover TVs on the network\n"
 	    "  -p port   HTTP server port (default: auto)\n"
@@ -41,6 +42,7 @@ main(int argc, char *argv[])
 	const char	*host = NULL;
 	const char	*file = NULL;
 	int		 screen = 0;
+	int		 transcode = 0;
 	int		 discover = 0;
 	int		 port = 0;
 	int		 ch;
@@ -49,7 +51,7 @@ main(int argc, char *argv[])
 	media_ctx_t	 media;
 	char		 media_url[256];
 
-	while ((ch = getopt(argc, argv, "h:f:sp:dv")) != -1) {
+	while ((ch = getopt(argc, argv, "h:f:sp:dvt")) != -1) {
 		switch (ch) {
 		case 'h':
 			host = optarg;
@@ -65,6 +67,9 @@ main(int argc, char *argv[])
 			break;
 		case 'd':
 			discover = 1;
+			break;
+		case 't':
+			transcode = 1;
 			break;
 		case 'v':
 			verbose = 1;
@@ -115,13 +120,14 @@ main(int argc, char *argv[])
 		media.mode = MODE_FILE;
 		media.filepath = file;
 		printf("Probing %s...\n", file);
-		if (media_probe(&media, file) < 0) {
+		if (media_probe(&media, file, transcode) < 0) {
 			fprintf(stderr, "Failed to probe %s\n", file);
 			return 1;
 		}
 		if (media.needs_transcode) {
-			printf("Transcoding required (format not natively "
-			    "supported)\n");
+			printf("Transcoding %s\n", transcode ?
+			    "forced by -t flag" :
+			    "required (format not natively supported)");
 			if (media_open_transcode(&media) < 0) {
 				fprintf(stderr, "Failed to set up "
 				    "transcoding\n");

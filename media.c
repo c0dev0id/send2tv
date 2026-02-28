@@ -200,7 +200,7 @@ set_mime_type(media_ctx_t *ctx, const char *fmt_name,
  * Probe a media file to determine codecs and whether transcoding is needed.
  */
 int
-media_probe(media_ctx_t *ctx, const char *filepath)
+media_probe(media_ctx_t *ctx, const char *filepath, int force_transcode)
 {
 	AVFormatContext		*fmt = NULL;
 	const char		*fmt_name;
@@ -248,6 +248,9 @@ media_probe(media_ctx_t *ctx, const char *filepath)
 		ctx->needs_transcode = !(audio_codec_ok(aud_codec) &&
 		    container_ok(fmt_name));
 	}
+
+	if (force_transcode)
+		ctx->needs_transcode = 1;
 
 	DPRINTF("media: format=%s, video=%s, audio=%s\n", fmt_name,
 	    vid_codec != AV_CODEC_ID_NONE ? avcodec_get_name(vid_codec) : "none",
