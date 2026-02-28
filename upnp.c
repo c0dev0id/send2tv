@@ -496,6 +496,54 @@ soap_action(upnp_ctx_t *ctx, const char *action, const char *body_xml)
 }
 
 /*
+ * Send a SOAP action and return the response body.
+ * Caller must free the returned buffer.
+ * Returns NULL on error or SOAP fault.
+ */
+static char *
+soap_action_resp(upnp_ctx_t *ctx, const char *action, const char *body_xml)
+{
+	char	 headers[512];
+	char	 envelope[SEND2TV_SOAP_BUF];
+	char	*resp;
+	int	 resp_len;
+
+	snprintf(headers, sizeof(headers),
+	    "Content-Type: text/xml; charset=\"utf-8\"\r\n"
+	    "SOAPAction: \"urn:schemas-upnp-org:service:AVTransport:1#%s\"\r\n",
+	    action);
+
+	snprintf(envelope, sizeof(envelope),
+	    "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n"
+	    "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\""
+	    " s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">\r\n"
+	    "  <s:Body>\r\n"
+	    "    %s\r\n"
+	    "  </s:Body>\r\n"
+	    "</s:Envelope>",
+	    body_xml);
+
+	DPRINTF("soap: %s -> %s:%d%s\n", action, ctx->tv_ip,
+	    ctx->tv_port, ctx->control_url);
+
+	resp = http_request(ctx->tv_ip, ctx->tv_port, "POST",
+	    ctx->control_url, headers, envelope, &resp_len);
+	if (resp == NULL) {
+		fprintf(stderr, "SOAP %s failed: no response\n", action);
+		return NULL;
+	}
+
+	if (strstr(resp, "Fault") != NULL) {
+		fprintf(stderr, "SOAP %s fault\n", action);
+		DPRINTF("soap: response: %.*s\n", resp_len, resp);
+		free(resp);
+		return NULL;
+	}
+
+	return resp;
+}
+
+/*
  * SetAVTransportURI with DIDL-Lite metadata.
  */
 int
@@ -589,6 +637,91 @@ upnp_stop(upnp_ctx_t *ctx)
 	    " xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\">"
 	    "<InstanceID>0</InstanceID>"
 	    "</u:Stop>");
+}
+
+/*
+ * Get the current playback position from the TV.
+ * Writes the position in seconds to *pos_sec.
+ * Returns 0 on success, -1 on failure.
+ */
+int
+upnp_get_position(upnp_ctx_t *ctx, int *pos_sec)
+{
+	char	*resp;
+	char	 reltime[32];
+	int	 h, m, s;
+
+	resp = soap_action_resp(ctx, "GetPositionInfo",
+	    "<u:GetPositionInfo"
+	    " xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\">"
+	    "<InstanceID>0</InstanceID>"
+	    "</u:GetPositionInfo>");
+	if (resp == NULL)
+		return -1;
+
+	if (xml_extract(resp, "<RelTime>", "</RelTime>",
+	    reltime, sizeof(reltime)) < 0) {
+		free(resp);
+		return -1;
+	}
+	free(resp);
+
+	if (sscanf(reltime, "%d:%d:%d", &h, &m, &s) != 3)
+		return -1;
+
+	*pos_sec = h * 3600 + m * 60 + s;
+	return 0;
+}
+
+/*
+ * Seek to an absolute position (in seconds from start).
+ * Returns 0 on success, -1 on failure.
+ */
+int
+upnp_seek(upnp_ctx_t *ctx, int target_sec)
+{
+	char	 body[512];
+	int	 h, m, s;
+
+	if (target_sec < 0)
+		target_sec = 0;
+
+	h = target_sec / 3600;
+	m = (target_sec % 3600) / 60;
+	s = target_sec % 60;
+
+	snprintf(body, sizeof(body),
+	    "<u:Seek"
+	    " xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\">"
+	    "<InstanceID>0</InstanceID>"
+	    "<Unit>REL_TIME</Unit>"
+	    "<Target>%d:%02d:%02d</Target>"
+	    "</u:Seek>",
+	    h, m, s);
+
+	return soap_action(ctx, "Seek", body);
+}
+
+/*
+ * Seek relative to current position by delta_sec seconds.
+ * Negative values seek backward. Clamps to 0 on the low end.
+ * Returns 0 on success, -1 on failure.
+ */
+int
+upnp_seek_relative(upnp_ctx_t *ctx, int delta_sec)
+{
+	int	 pos;
+
+	if (upnp_get_position(ctx, &pos) < 0)
+		return -1;
+
+	DPRINTF("seek: position=%d, delta=%d\n", pos, delta_sec);
+
+	pos += delta_sec;
+	if (pos < 0)
+		pos = 0;
+
+	return upnp_seek(ctx, pos);
 }
 
 /*

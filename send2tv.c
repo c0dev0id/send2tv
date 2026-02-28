@@ -3,11 +3,48 @@
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>
+#include <termios.h>
+#include <poll.h>
 
 #include "send2tv.h"
 
 int verbose = 0;
 static volatile int running = 1;
+static struct termios orig_termios;
+static int term_raw = 0;
+
+static void
+term_restore(void)
+{
+	if (term_raw) {
+		tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+		term_raw = 0;
+	}
+}
+
+static int
+term_raw_mode(void)
+{
+	struct termios raw;
+
+	if (!isatty(STDIN_FILENO))
+		return -1;
+
+	if (tcgetattr(STDIN_FILENO, &orig_termios) < 0)
+		return -1;
+
+	raw = orig_termios;
+	raw.c_lflag &= ~(ECHO | ICANON | ISIG);
+	raw.c_iflag &= ~(IXON | ICRNL);
+	raw.c_cc[VMIN] = 0;
+	raw.c_cc[VTIME] = 0;
+
+	if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) < 0)
+		return -1;
+
+	term_raw = 1;
+	return 0;
+}
 
 static void
 usage(void)
@@ -24,7 +61,11 @@ usage(void)
 	    "  -a device sndio audio device (default: snd/default.mon)\n"
 	    "  -d        discover TVs on the network\n"
 	    "  -p port   HTTP server port (default: auto)\n"
-	    "  -v        verbose/debug output\n");
+	    "  -v        verbose/debug output\n"
+	    "\n"
+	    "During playback:\n"
+	    "  arrows    seek (left/right: 10s, up/down: 30s)\n"
+	    "  q         quit\n");
 	exit(1);
 }
 
@@ -32,6 +73,7 @@ static void
 sighandler(int sig)
 {
 	(void)sig;
+	term_restore();
 	if (!running)
 		_exit(1);
 	running = 0;
@@ -105,6 +147,7 @@ main(int argc, char *argv[])
 	signal(SIGINT, sighandler);
 	signal(SIGTERM, sighandler);
 	signal(SIGPIPE, SIG_IGN);
+	atexit(term_restore);
 
 	/* Initialize contexts */
 	memset(&upnp, 0, sizeof(upnp));
@@ -241,11 +284,60 @@ main(int argc, char *argv[])
 	if (upnp_play(&upnp) < 0)
 		goto shutdown;
 
-	printf("Playing. Press Ctrl+C to stop.\n");
+	/* Enter raw terminal mode for key input */
+	if (term_raw_mode() == 0)
+		printf("Playing. Keys: arrows=seek, q=quit\n");
+	else
+		printf("Playing. Press Ctrl+C to stop.\n");
 
-	/* Wait for signal */
-	while (running && media.running)
-		sleep(1);
+	/* Event loop: poll stdin for keypresses */
+	{
+		struct pollfd	 pfd;
+		unsigned char	 buf[8];
+		ssize_t		 n;
+		int		 can_seek;
+
+		can_seek = (media.mode == MODE_FILE);
+
+		pfd.fd = STDIN_FILENO;
+		pfd.events = POLLIN;
+
+		while (running && media.running) {
+			if (poll(&pfd, 1, 500) <= 0)
+				continue;
+
+			n = read(STDIN_FILENO, buf, sizeof(buf));
+			if (n <= 0)
+				continue;
+
+			if (buf[0] == 'q' || buf[0] == 'Q' ||
+			    buf[0] == 0x03) {
+				running = 0;
+				break;
+			}
+
+			/* Arrow keys: ESC [ A/B/C/D */
+			if (can_seek && n >= 3 &&
+			    buf[0] == 0x1b && buf[1] == '[') {
+				switch (buf[2]) {
+				case 'C':	/* Right: +10s */
+					upnp_seek_relative(&upnp, 10);
+					break;
+				case 'D':	/* Left: -10s */
+					upnp_seek_relative(&upnp, -10);
+					break;
+				case 'A':	/* Up: +30s */
+					upnp_seek_relative(&upnp, 30);
+					break;
+				case 'B':	/* Down: -30s */
+					upnp_seek_relative(&upnp, -30);
+					break;
+				}
+			}
+		}
+	}
+
+	term_restore();
 
 shutdown:
 	printf("\nStopping...\n");
