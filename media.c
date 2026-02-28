@@ -81,7 +81,8 @@ video_container_ok(enum AVCodecID codec, const char *fmt)
 	case AV_CODEC_ID_VP9:
 	case AV_CODEC_ID_AV1:
 		/* VP8/VP9/AV1: WebM only */
-		return strstr(fmt, "webm") != NULL;
+		return strstr(fmt, "webm") != NULL ||
+		    strstr(fmt, "matroska") != NULL;
 	case AV_CODEC_ID_MPEG4:
 		return strstr(fmt, "avi") != NULL ||
 		    strstr(fmt, "matroska") != NULL ||
@@ -93,27 +94,59 @@ video_container_ok(enum AVCodecID codec, const char *fmt)
 	case AV_CODEC_ID_MPEG2VIDEO:
 	case AV_CODEC_ID_MPEG1VIDEO:
 		return strstr(fmt, "mpeg") != NULL;
+	case AV_CODEC_ID_VC1:
+	case AV_CODEC_ID_WMV3:
+		/* AVI, MKV, ASF, MP4, 3GP, MOV, FLV */
+		return strstr(fmt, "avi") != NULL ||
+		    strstr(fmt, "matroska") != NULL ||
+		    strstr(fmt, "asf") != NULL ||
+		    strstr(fmt, "mp4") != NULL ||
+		    strstr(fmt, "mov") != NULL ||
+		    strstr(fmt, "3gp") != NULL ||
+		    strstr(fmt, "flv") != NULL;
+	case AV_CODEC_ID_MJPEG:
+		/* AVI, MKV, ASF, MP4, 3GP, MOV, FLV */
+		return strstr(fmt, "avi") != NULL ||
+		    strstr(fmt, "matroska") != NULL ||
+		    strstr(fmt, "asf") != NULL ||
+		    strstr(fmt, "mp4") != NULL ||
+		    strstr(fmt, "mov") != NULL ||
+		    strstr(fmt, "3gp") != NULL ||
+		    strstr(fmt, "flv") != NULL;
 	default:
 		return 0;
 	}
 }
 
 /*
- * Check if audio codec is natively supported by Samsung TVs.
+ * Check if audio codec is natively supported by Samsung 2024 TVs.
+ * Note: DTS is NOT supported on 2024 TVs.
  */
 static int
 audio_codec_ok(enum AVCodecID id)
 {
 	switch (id) {
-	case AV_CODEC_ID_AAC:
+	case AV_CODEC_ID_AAC:		/* AAC, HE-AAC */
 	case AV_CODEC_ID_MP3:
+	case AV_CODEC_ID_MP2:		/* MPEG Layer 2 */
 	case AV_CODEC_ID_FLAC:
-	case AV_CODEC_ID_PCM_S16LE:
-	case AV_CODEC_ID_PCM_S16BE:
-	case AV_CODEC_ID_AC3:
-	case AV_CODEC_ID_EAC3:
-	case AV_CODEC_ID_OPUS:
+	case AV_CODEC_ID_AC3:		/* Dolby Digital */
+	case AV_CODEC_ID_EAC3:		/* DD+ / E-AC-3 */
 	case AV_CODEC_ID_VORBIS:
+	case AV_CODEC_ID_OPUS:
+	case AV_CODEC_ID_WMAV1:	/* WMA */
+	case AV_CODEC_ID_WMAV2:
+	case AV_CODEC_ID_PCM_S16LE:	/* LPCM */
+	case AV_CODEC_ID_PCM_S16BE:
+	case AV_CODEC_ID_PCM_S24LE:
+	case AV_CODEC_ID_PCM_S24BE:
+	case AV_CODEC_ID_PCM_S32LE:
+	case AV_CODEC_ID_PCM_S32BE:
+	case AV_CODEC_ID_PCM_U8:
+	case AV_CODEC_ID_PCM_ALAW:	/* G.711 A-Law */
+	case AV_CODEC_ID_PCM_MULAW:	/* G.711 u-Law */
+	case AV_CODEC_ID_ADPCM_IMA_WAV:	/* ADPCM IMA */
+	case AV_CODEC_ID_ADPCM_MS:		/* ADPCM MS */
 		return 1;
 	default:
 		return 0;
@@ -121,7 +154,7 @@ audio_codec_ok(enum AVCodecID id)
 }
 
 /*
- * Check if container format is supported by Samsung TVs.
+ * Check if container format is supported by Samsung 2024 TVs.
  */
 static int
 container_ok(const char *name)
@@ -131,8 +164,13 @@ container_ok(const char *name)
 	return strstr(name, "mp4") != NULL ||
 	    strstr(name, "mov") != NULL ||
 	    strstr(name, "matroska") != NULL ||
+	    strstr(name, "webm") != NULL ||
 	    strstr(name, "mpegts") != NULL ||
 	    strstr(name, "avi") != NULL ||
+	    strstr(name, "asf") != NULL ||
+	    strstr(name, "flv") != NULL ||
+	    strstr(name, "mpeg") != NULL ||
+	    strstr(name, "vob") != NULL ||
 	    strstr(name, "mp3") != NULL ||
 	    strstr(name, "flac") != NULL ||
 	    strstr(name, "ogg") != NULL ||
