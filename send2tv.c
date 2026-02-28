@@ -12,6 +12,8 @@ int verbose = 0;
 static volatile int running = 1;
 static struct termios orig_termios;
 static int term_raw = 0;
+static char conf_host[256];
+static char conf_audiodev[64];
 
 static void
 term_restore(void)
@@ -80,6 +82,116 @@ sighandler(int sig)
 	running = 0;
 }
 
+static void
+load_config(const char **host, const char **audiodev, int *port,
+    int *bitrate, int *transcode)
+{
+	FILE		*fp;
+	const char	*home;
+	char		 path[1024];
+	char		 line[512];
+	int		 lineno;
+
+	home = getenv("HOME");
+	if (home == NULL)
+		return;
+
+	snprintf(path, sizeof(path), "%s/.send2tv.conf", home);
+
+	fp = fopen(path, "r");
+	if (fp == NULL)
+		return;
+
+	lineno = 0;
+	while (fgets(line, sizeof(line), fp) != NULL) {
+		char	*key, *val, *p;
+		size_t	 len;
+
+		lineno++;
+
+		/* strip trailing whitespace */
+		len = strlen(line);
+		while (len > 0 && (line[len - 1] == '\n' ||
+		    line[len - 1] == '\r' ||
+		    line[len - 1] == ' ' ||
+		    line[len - 1] == '\t'))
+			line[--len] = '\0';
+
+		/* skip leading whitespace */
+		key = line;
+		while (*key == ' ' || *key == '\t')
+			key++;
+
+		/* skip empty lines and comments */
+		if (*key == '\0' || *key == '#')
+			continue;
+
+		/* find '=' separator */
+		p = strchr(key, '=');
+		if (p == NULL) {
+			fprintf(stderr, "%s:%d: missing '='\n",
+			    path, lineno);
+			continue;
+		}
+
+		*p = '\0';
+		val = p + 1;
+
+		/* strip trailing whitespace from key */
+		p = key + strlen(key) - 1;
+		while (p > key && (*p == ' ' || *p == '\t'))
+			*p-- = '\0';
+
+		/* strip leading whitespace from value */
+		while (*val == ' ' || *val == '\t')
+			val++;
+
+		if (strcmp(key, "host") == 0) {
+			strlcpy(conf_host, val, sizeof(conf_host));
+			*host = conf_host;
+		} else if (strcmp(key, "audiodev") == 0) {
+			strlcpy(conf_audiodev, val,
+			    sizeof(conf_audiodev));
+			*audiodev = conf_audiodev;
+		} else if (strcmp(key, "bitrate") == 0) {
+			*bitrate = atoi(val);
+			if (*bitrate <= 0) {
+				fprintf(stderr,
+				    "%s:%d: invalid bitrate\n",
+				    path, lineno);
+				*bitrate = 2000;
+			}
+		} else if (strcmp(key, "port") == 0) {
+			*port = atoi(val);
+		} else if (strcmp(key, "transcode") == 0) {
+			if (strcmp(val, "yes") == 0)
+				*transcode = 1;
+			else if (strcmp(val, "no") == 0)
+				*transcode = 0;
+			else
+				fprintf(stderr,
+				    "%s:%d: transcode: "
+				    "expected yes or no\n",
+				    path, lineno);
+		} else if (strcmp(key, "verbose") == 0) {
+			if (strcmp(val, "yes") == 0)
+				verbose = 1;
+			else if (strcmp(val, "no") == 0)
+				verbose = 0;
+			else
+				fprintf(stderr,
+				    "%s:%d: verbose: "
+				    "expected yes or no\n",
+				    path, lineno);
+		} else {
+			fprintf(stderr, "%s:%d: unknown key '%s'\n",
+			    path, lineno, key);
+		}
+	}
+
+	fclose(fp);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -96,6 +208,8 @@ main(int argc, char *argv[])
 	httpd_ctx_t	 httpd;
 	media_ctx_t	 media;
 	char		 media_url[256];
+
+	load_config(&host, &audiodev, &port, &bitrate, &transcode);
 
 	while ((ch = getopt(argc, argv, "a:b:h:sp:dvt")) != -1) {
 		switch (ch) {
