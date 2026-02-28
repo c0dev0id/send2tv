@@ -455,11 +455,28 @@ soap_action(upnp_ctx_t *ctx, const char *action, const char *body_xml)
  */
 int
 upnp_set_uri(upnp_ctx_t *ctx, const char *uri, const char *mime,
-    const char *title, int is_streaming)
+    const char *title, int is_streaming, const char *dlna_profile)
 {
 	char	 didl[2048];
 	char	*didl_encoded;
 	char	 body[4096];
+	char	 dlna_features[256];
+
+	if (dlna_profile != NULL && dlna_profile[0] != '\0')
+		snprintf(dlna_features, sizeof(dlna_features),
+		    "DLNA.ORG_PN=%s;DLNA.ORG_OP=%s;DLNA.ORG_CI=%s;"
+		    "DLNA.ORG_FLAGS="
+		    "01700000000000000000000000000000",
+		    dlna_profile,
+		    is_streaming ? "00" : "01",
+		    is_streaming ? "1" : "0");
+	else
+		snprintf(dlna_features, sizeof(dlna_features),
+		    "DLNA.ORG_OP=%s;DLNA.ORG_CI=%s;"
+		    "DLNA.ORG_FLAGS="
+		    "01700000000000000000000000000000",
+		    is_streaming ? "00" : "01",
+		    is_streaming ? "1" : "0");
 
 	snprintf(didl, sizeof(didl),
 	    "<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\""
@@ -472,13 +489,7 @@ upnp_set_uri(upnp_ctx_t *ctx, const char *uri, const char *mime,
 	    "%s\">%s</res>"
 	    "</item>"
 	    "</DIDL-Lite>",
-	    title, mime,
-	    is_streaming ?
-	    "DLNA.ORG_OP=00;DLNA.ORG_CI=1;"
-	    "DLNA.ORG_FLAGS=01700000000000000000000000000000" :
-	    "DLNA.ORG_OP=01;DLNA.ORG_CI=0;"
-	    "DLNA.ORG_FLAGS=01700000000000000000000000000000",
-	    uri);
+	    title, mime, dlna_features, uri);
 
 	didl_encoded = xml_encode(didl);
 	if (didl_encoded == NULL)

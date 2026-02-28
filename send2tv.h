@@ -39,6 +39,7 @@ typedef struct {
 	const char	*filepath;	/* NULL in screen mode */
 	int		 needs_transcode;
 	char		 mime_type[64];
+	char		 dlna_profile[64]; /* DLNA.ORG_PN value */
 
 	/* pipe for transcoded/captured output */
 	int		 pipe_rd;
@@ -98,7 +99,7 @@ typedef struct {
 int	 upnp_discover(void);
 int	 upnp_find_transport(upnp_ctx_t *ctx);
 int	 upnp_set_uri(upnp_ctx_t *ctx, const char *uri, const char *mime,
-	    const char *title, int is_streaming);
+	    const char *title, int is_streaming, const char *dlna_profile);
 int	 upnp_play(upnp_ctx_t *ctx);
 int	 upnp_stop(upnp_ctx_t *ctx);
 int	 upnp_get_local_ip(upnp_ctx_t *ctx);

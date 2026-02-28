@@ -193,6 +193,46 @@ set_mime_type(media_ctx_t *ctx, const char *fmt_name,
 }
 
 /*
+ * Determine DLNA profile name (DLNA.ORG_PN) from codec and container.
+ * Samsung TVs require this in the protocolInfo to accept SetAVTransportURI.
+ */
+static void
+set_dlna_profile(media_ctx_t *ctx, const char *fmt_name,
+    enum AVCodecID vid_codec)
+{
+	const char *pn = NULL;
+
+	switch (vid_codec) {
+	case AV_CODEC_ID_H264:
+		if (strstr(fmt_name, "mp4") || strstr(fmt_name, "mov") ||
+		    strstr(fmt_name, "3gp"))
+			pn = "AVC_MP4_MP_SD_AAC";
+		else if (strstr(fmt_name, "matroska"))
+			pn = "AVC_MKV_MP_HD_AAC";
+		else if (strstr(fmt_name, "mpegts"))
+			pn = "AVC_TS_MP_SD_AAC_MULT5";
+		else if (strstr(fmt_name, "avi"))
+			pn = "AVC_MP4_MP_SD_AAC";
+		break;
+	case AV_CODEC_ID_HEVC:
+		if (strstr(fmt_name, "mp4") || strstr(fmt_name, "mov"))
+			pn = "HEVC_MP4_MP_L51_AAC";
+		break;
+	case AV_CODEC_ID_MPEG4:
+		pn = "MPEG4_P2_MP4_SP_AAC";
+		break;
+	default:
+		break;
+	}
+
+	if (pn != NULL)
+		strlcpy(ctx->dlna_profile, pn,
+		    sizeof(ctx->dlna_profile));
+	else
+		ctx->dlna_profile[0] = '\0';
+}
+
+/*
  * Probe a media file to determine codecs and whether transcoding is needed.
  */
 int
@@ -252,11 +292,15 @@ media_probe(media_ctx_t *ctx, const char *filepath, int force_transcode)
 	    vid_codec != AV_CODEC_ID_NONE ? avcodec_get_name(vid_codec) : "none",
 	    aud_codec != AV_CODEC_ID_NONE ? avcodec_get_name(aud_codec) : "none");
 
-	if (!ctx->needs_transcode)
+	if (!ctx->needs_transcode) {
 		set_mime_type(ctx, fmt_name, vid_codec);
-	else
+		set_dlna_profile(ctx, fmt_name, vid_codec);
+	} else {
 		strlcpy(ctx->mime_type, "video/mp2t",
 		    sizeof(ctx->mime_type));
+		strlcpy(ctx->dlna_profile, "AVC_TS_MP_SD_AAC_MULT5",
+		    sizeof(ctx->dlna_profile));
+	}
 
 	DPRINTF("media: needs_transcode=%d, mime=%s\n",
 	    ctx->needs_transcode, ctx->mime_type);
@@ -963,6 +1007,8 @@ media_open_screen(media_ctx_t *ctx)
 
 	ctx->needs_transcode = 1;
 	strlcpy(ctx->mime_type, "video/mp2t", sizeof(ctx->mime_type));
+	strlcpy(ctx->dlna_profile, "AVC_TS_MP_SD_AAC_MULT5",
+	    sizeof(ctx->dlna_profile));
 
 	return 0;
 }
