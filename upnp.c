@@ -30,6 +30,28 @@ static const struct {
 };
 
 /*
+ * Send all bytes to a socket, handling partial writes.
+ * Returns 0 on success, -1 on error.
+ */
+static int
+http_send_all(int sock, const char *buf, int len)
+{
+	ssize_t	 n;
+
+	while (len > 0) {
+		n = send(sock, buf, len, 0);
+		if (n < 0) {
+			if (errno == EINTR)
+				continue;
+			return -1;
+		}
+		buf += n;
+		len -= n;
+	}
+	return 0;
+}
+
+/*
  * Simple HTTP request over a TCP socket. Returns malloc'd response body.
  * Caller must free. Sets *resp_len to body length. Returns NULL on error.
  */
@@ -98,9 +120,17 @@ http_request(const char *host, int port, const char *method, const char *path,
 		    method, path, host, port,
 		    extra_headers ? extra_headers : "");
 
+	/* Guard against snprintf truncation */
+	if (n >= (int)sizeof(req)) {
+		DPRINTF("http: request too large (%d > %zu)\n",
+		    n, sizeof(req));
+		close(sock);
+		return NULL;
+	}
+
 	DPRINTF("http: %s %s:%d%s\n", method, host, port, path);
 
-	if (send(sock, req, n, 0) != n) {
+	if (http_send_all(sock, req, n) < 0) {
 		close(sock);
 		return NULL;
 	}
@@ -124,6 +154,8 @@ http_request(const char *host, int port, const char *method, const char *path,
 			}
 		}
 	}
+	if (n < 0)
+		DPRINTF("http: recv error: %s\n", strerror(errno));
 	buf[buf_len] = '\0';
 	close(sock);
 
@@ -403,6 +435,8 @@ xml_encode(const char *s)
 
 /*
  * Send a SOAP action to the TV's AVTransport service.
+ * Retries up to 2 times on no-response (Samsung TVs sometimes close
+ * the connection before replying, especially for SetAVTransportURI).
  * Returns 0 on success, -1 on failure.
  */
 static int
@@ -412,6 +446,7 @@ soap_action(upnp_ctx_t *ctx, const char *action, const char *body_xml)
 	char	 envelope[SEND2TV_SOAP_BUF];
 	char	*resp;
 	int	 resp_len;
+	int	 attempts;
 
 	snprintf(headers, sizeof(headers),
 	    "Content-Type: text/xml; charset=\"utf-8\"\r\n"
@@ -431,8 +466,18 @@ soap_action(upnp_ctx_t *ctx, const char *action, const char *body_xml)
 	DPRINTF("soap: %s -> %s:%d%s\n", action, ctx->tv_ip,
 	    ctx->tv_port, ctx->control_url);
 
-	resp = http_request(ctx->tv_ip, ctx->tv_port, "POST",
-	    ctx->control_url, headers, envelope, &resp_len);
+	resp = NULL;
+	for (attempts = 0; attempts < 3; attempts++) {
+		if (attempts > 0) {
+			DPRINTF("soap: %s retry %d\n", action, attempts);
+			sleep(1);
+		}
+		resp = http_request(ctx->tv_ip, ctx->tv_port, "POST",
+		    ctx->control_url, headers, envelope, &resp_len);
+		if (resp != NULL)
+			break;
+	}
+
 	if (resp == NULL) {
 		fprintf(stderr, "SOAP %s failed: no response\n", action);
 		return -1;
