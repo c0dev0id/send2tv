@@ -681,6 +681,13 @@ init_audio_encoder(media_ctx_t *ctx, int sample_rate, int channels)
 	DPRINTF("media: audio encoder: %s, %dHz, %dch\n",
 	    codec->name, sample_rate, channels);
 
+	ctx->audio_fifo = av_audio_fifo_alloc(ctx->audio_enc->sample_fmt,
+	    channels, ctx->audio_enc->frame_size);
+	if (ctx->audio_fifo == NULL) {
+		fprintf(stderr, "Cannot allocate audio FIFO\n");
+		return -1;
+	}
+
 	return 0;
 }
 
@@ -1112,15 +1119,47 @@ done:
 }
 
 /*
- * Process audio: decode, resample, encode.
+ * Drain complete frames from audio FIFO and encode them.
+ */
+static void
+drain_audio_fifo(media_ctx_t *ctx, int out_stream_idx, int64_t *audio_pts)
+{
+	int		 frame_size;
+	AVFrame		*out_frame;
+
+	frame_size = ctx->audio_enc->frame_size;
+	if (frame_size <= 0)
+		frame_size = 1024;
+
+	while (av_audio_fifo_size(ctx->audio_fifo) >= frame_size) {
+		out_frame = av_frame_alloc();
+		out_frame->nb_samples = frame_size;
+		out_frame->format = ctx->audio_enc->sample_fmt;
+		av_channel_layout_copy(&out_frame->ch_layout,
+		    &ctx->audio_enc->ch_layout);
+		out_frame->sample_rate = ctx->audio_enc->sample_rate;
+		av_frame_get_buffer(out_frame, 0);
+
+		av_audio_fifo_read(ctx->audio_fifo,
+		    (void **)out_frame->data, frame_size);
+
+		out_frame->pts = *audio_pts;
+		*audio_pts += frame_size;
+		encode_audio_frame(ctx, out_frame, out_stream_idx);
+		av_frame_free(&out_frame);
+	}
+}
+
+/*
+ * Process audio: decode, resample, buffer in FIFO, encode complete frames.
  */
 static int
 process_audio_packet(media_ctx_t *ctx, AVPacket *pkt,
     AVCodecContext *dec, int out_stream_idx, int64_t *audio_pts)
 {
-	AVFrame		*frame, *out_frame;
+	AVFrame		*frame, *tmp_frame;
 	int		 ret;
-	int		 out_samples;
+	int		 out_samples, max_out;
 
 	frame = av_frame_alloc();
 
@@ -1129,36 +1168,38 @@ process_audio_packet(media_ctx_t *ctx, AVPacket *pkt,
 		goto done;
 
 	while (avcodec_receive_frame(dec, frame) == 0) {
-		out_samples = swr_get_out_samples(ctx->swr_ctx,
+		max_out = swr_get_out_samples(ctx->swr_ctx,
 		    frame->nb_samples);
-		if (out_samples <= 0) {
+		if (max_out <= 0) {
 			av_frame_unref(frame);
 			continue;
 		}
 
-		out_frame = av_frame_alloc();
-		out_frame->nb_samples = ctx->audio_enc->frame_size ?
-		    ctx->audio_enc->frame_size : out_samples;
-		out_frame->format = ctx->audio_enc->sample_fmt;
-		av_channel_layout_copy(&out_frame->ch_layout,
+		tmp_frame = av_frame_alloc();
+		tmp_frame->nb_samples = max_out;
+		tmp_frame->format = ctx->audio_enc->sample_fmt;
+		av_channel_layout_copy(&tmp_frame->ch_layout,
 		    &ctx->audio_enc->ch_layout);
-		out_frame->sample_rate = ctx->audio_enc->sample_rate;
-		av_frame_get_buffer(out_frame, 0);
+		tmp_frame->sample_rate = ctx->audio_enc->sample_rate;
+		av_frame_get_buffer(tmp_frame, 0);
 
 		out_samples = swr_convert(ctx->swr_ctx,
-		    out_frame->data, out_frame->nb_samples,
+		    tmp_frame->data, tmp_frame->nb_samples,
 		    (const uint8_t **)frame->data, frame->nb_samples);
 
 		if (out_samples > 0) {
-			out_frame->nb_samples = out_samples;
-			out_frame->pts = *audio_pts;
-			*audio_pts += out_samples;
-			encode_audio_frame(ctx, out_frame, out_stream_idx);
+			av_audio_fifo_realloc(ctx->audio_fifo,
+			    av_audio_fifo_size(ctx->audio_fifo) +
+			    out_samples);
+			av_audio_fifo_write(ctx->audio_fifo,
+			    (void **)tmp_frame->data, out_samples);
 		}
 
-		av_frame_free(&out_frame);
+		av_frame_free(&tmp_frame);
 		av_frame_unref(frame);
 	}
+
+	drain_audio_fifo(ctx, out_stream_idx, audio_pts);
 
 done:
 	av_frame_free(&frame);
@@ -1204,11 +1245,13 @@ media_transcode_thread(void *arg)
 		av_packet_unref(pkt);
 	}
 
-	/* Flush encoders */
+	/* Flush remaining audio from FIFO and encoders */
 	if (ctx->video_enc != NULL)
 		encode_video_frame(ctx, NULL, &vid_pts, 0);
-	if (ctx->audio_enc != NULL)
+	if (ctx->audio_enc != NULL) {
+		drain_audio_fifo(ctx, audio_out_idx, &audio_pts);
 		encode_audio_frame(ctx, NULL, audio_out_idx);
+	}
 
 	av_write_trailer(ctx->ofmt_ctx);
 	av_packet_free(&pkt);
@@ -1274,11 +1317,13 @@ media_capture_thread(void *arg)
 		}
 	}
 
-	/* Flush */
+	/* Flush remaining audio from FIFO and encoders */
 	if (ctx->video_enc != NULL)
 		encode_video_frame(ctx, NULL, &vid_pts, 0);
-	if (ctx->audio_enc != NULL)
+	if (ctx->audio_enc != NULL) {
+		drain_audio_fifo(ctx, audio_out_idx, &audio_pts);
 		encode_audio_frame(ctx, NULL, audio_out_idx);
+	}
 
 	av_write_trailer(ctx->ofmt_ctx);
 
@@ -1295,6 +1340,8 @@ media_capture_thread(void *arg)
 void
 media_close(media_ctx_t *ctx)
 {
+	if (ctx->audio_fifo != NULL)
+		av_audio_fifo_free(ctx->audio_fifo);
 	if (ctx->swr_ctx != NULL)
 		swr_free(&ctx->swr_ctx);
 	if (ctx->filter_graph != NULL)
