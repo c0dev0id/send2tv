@@ -41,10 +41,27 @@ static void
 send_headers(int fd, int status, const char *status_text,
     const char *content_type, off_t content_length,
     off_t range_start, off_t range_end, off_t total_size,
-    int is_streaming)
+    int is_streaming, const char *dlna_profile)
 {
 	char	 hdrs[2048];
+	char	 dlna_features[256];
 	int	 n;
+
+	if (dlna_profile != NULL && dlna_profile[0] != '\0')
+		snprintf(dlna_features, sizeof(dlna_features),
+		    "DLNA.ORG_PN=%s;DLNA.ORG_OP=%s;DLNA.ORG_CI=%s;"
+		    "DLNA.ORG_FLAGS="
+		    "01700000000000000000000000000000",
+		    dlna_profile,
+		    is_streaming ? "00" : "01",
+		    is_streaming ? "1" : "0");
+	else
+		snprintf(dlna_features, sizeof(dlna_features),
+		    "DLNA.ORG_OP=%s;DLNA.ORG_CI=%s;"
+		    "DLNA.ORG_FLAGS="
+		    "01700000000000000000000000000000",
+		    is_streaming ? "00" : "01",
+		    is_streaming ? "1" : "0");
 
 	n = snprintf(hdrs, sizeof(hdrs),
 	    "HTTP/1.1 %d %s\r\n"
@@ -52,12 +69,7 @@ send_headers(int fd, int status, const char *status_text,
 	    "transferMode.dlna.org: Streaming\r\n"
 	    "contentFeatures.dlna.org: %s\r\n"
 	    "Connection: close\r\n",
-	    status, status_text, content_type,
-	    is_streaming ?
-	    "DLNA.ORG_OP=00;DLNA.ORG_CI=1;"
-	    "DLNA.ORG_FLAGS=01700000000000000000000000000000" :
-	    "DLNA.ORG_OP=01;DLNA.ORG_CI=0;"
-	    "DLNA.ORG_FLAGS=01700000000000000000000000000000");
+	    status, status_text, content_type, dlna_features);
 
 	if (status == 206 && total_size > 0)
 		n += snprintf(hdrs + n, sizeof(hdrs) - n,
@@ -93,7 +105,7 @@ serve_file(int client_fd, media_ctx_t *media, int head_only,
 
 	if (stat(media->filepath, &st) < 0) {
 		send_headers(client_fd, 404, "Not Found",
-		    "text/plain", 9, -1, -1, -1, 0);
+		    "text/plain", 9, -1, -1, -1, 0, NULL);
 		if (!head_only)
 			send_all(client_fd, "Not Found", 9);
 		return;
@@ -106,10 +118,12 @@ serve_file(int client_fd, media_ctx_t *media, int head_only,
 
 	if (range_start > 0)
 		send_headers(client_fd, 206, "Partial Content",
-		    media->mime_type, -1, range_start, end, total, 0);
+		    media->mime_type, -1, range_start, end, total, 0,
+		    media->dlna_profile);
 	else
 		send_headers(client_fd, 200, "OK",
-		    media->mime_type, total, -1, -1, -1, 0);
+		    media->mime_type, total, -1, -1, -1, 0,
+		    media->dlna_profile);
 
 	if (head_only)
 		return;
@@ -141,7 +155,8 @@ serve_pipe(int client_fd, media_ctx_t *media, int head_only)
 	DPRINTF("httpd: serving from pipe, mime=%s\n", media->mime_type);
 
 	send_headers(client_fd, 200, "OK",
-	    media->mime_type, -1, -1, -1, -1, 1);
+	    media->mime_type, -1, -1, -1, -1, 1,
+	    media->dlna_profile);
 
 	if (head_only)
 		return;
@@ -180,7 +195,7 @@ handle_request(int client_fd, media_ctx_t *media)
 		head_only = 1;
 	else if (strncmp(req, "GET ", 4) != 0) {
 		send_headers(client_fd, 405, "Method Not Allowed",
-		    "text/plain", 0, -1, -1, -1, 0);
+		    "text/plain", 0, -1, -1, -1, 0, NULL);
 		return;
 	}
 
@@ -190,7 +205,7 @@ handle_request(int client_fd, media_ctx_t *media)
 		p++;
 	if (p == NULL || strncmp(p, "/media", 6) != 0) {
 		send_headers(client_fd, 404, "Not Found",
-		    "text/plain", 9, -1, -1, -1, 0);
+		    "text/plain", 9, -1, -1, -1, 0, NULL);
 		if (!head_only)
 			send_all(client_fd, "Not Found", 9);
 		return;
