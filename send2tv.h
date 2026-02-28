@@ -106,6 +106,9 @@ int	 upnp_set_uri(upnp_ctx_t *ctx, const char *uri, const char *mime,
 int	 upnp_play(upnp_ctx_t *ctx);
 int	 upnp_stop(upnp_ctx_t *ctx);
 int	 upnp_get_local_ip(upnp_ctx_t *ctx);
+int	 upnp_get_position(upnp_ctx_t *ctx, int *pos_sec);
+int	 upnp_seek(upnp_ctx_t *ctx, int target_sec);
+int	 upnp_seek_relative(upnp_ctx_t *ctx, int delta_sec);
 
 /* httpd.c */
 int	 httpd_start(httpd_ctx_t *ctx, media_ctx_t *media, int port);
