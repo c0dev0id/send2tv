@@ -362,6 +362,9 @@ init_vaapi(media_ctx_t *ctx)
 {
 	int ret;
 
+	if (ctx->hw_device_ctx != NULL)
+		return 0;
+
 	ret = av_hwdevice_ctx_create(&ctx->hw_device_ctx,
 	    AV_HWDEVICE_TYPE_VAAPI, "/dev/dri/renderD128", NULL, 0);
 	if (ret < 0) {
@@ -1333,6 +1336,17 @@ media_transcode_thread(void *arg)
 		return NULL;
 	}
 
+	/* Seek to start position if resuming from a non-zero offset */
+	if (ctx->start_sec > 0) {
+		int64_t ts = (int64_t)ctx->start_sec * AV_TIME_BASE;
+		av_seek_frame(ctx->ifmt_ctx, -1, ts,
+		    AVSEEK_FLAG_BACKWARD);
+		if (ctx->video_dec != NULL)
+			avcodec_flush_buffers(ctx->video_dec);
+		if (ctx->audio_dec != NULL)
+			avcodec_flush_buffers(ctx->audio_dec);
+	}
+
 	/* Audio output stream index (video is 0 if present, audio is 1) */
 	audio_out_idx = (ctx->video_idx >= 0) ? 1 : 0;
 
@@ -1439,6 +1453,70 @@ media_capture_thread(void *arg)
 
 	DPRINTF("media: capture thread finished\n");
 	return NULL;
+}
+
+/*
+ * Free transcode-specific resources but keep the input format context
+ * and VAAPI device so the pipeline can be restarted at a new position.
+ */
+static void
+media_close_transcode_state(media_ctx_t *ctx)
+{
+	if (ctx->audio_fifo != NULL) {
+		av_audio_fifo_free(ctx->audio_fifo);
+		ctx->audio_fifo = NULL;
+	}
+	if (ctx->swr_ctx != NULL)
+		swr_free(&ctx->swr_ctx);
+	if (ctx->filter_graph != NULL) {
+		avfilter_graph_free(&ctx->filter_graph);
+		ctx->filter_graph = NULL;
+		ctx->buffersrc_ctx = NULL;
+		ctx->buffersink_ctx = NULL;
+	}
+	if (ctx->video_enc != NULL)
+		avcodec_free_context(&ctx->video_enc);
+	if (ctx->audio_enc != NULL)
+		avcodec_free_context(&ctx->audio_enc);
+	if (ctx->video_dec != NULL)
+		avcodec_free_context(&ctx->video_dec);
+	if (ctx->audio_dec != NULL)
+		avcodec_free_context(&ctx->audio_dec);
+	if (ctx->ofmt_ctx != NULL) {
+		if (ctx->ofmt_ctx->pb != NULL) {
+			av_free(ctx->ofmt_ctx->pb->buffer);
+			avio_context_free(&ctx->ofmt_ctx->pb);
+		}
+		avformat_free_context(ctx->ofmt_ctx);
+		ctx->ofmt_ctx = NULL;
+	}
+	if (ctx->pipe_rd >= 0) {
+		close(ctx->pipe_rd);
+		ctx->pipe_rd = -1;
+	}
+	if (ctx->pipe_wr >= 0) {
+		close(ctx->pipe_wr);
+		ctx->pipe_wr = -1;
+	}
+}
+
+/*
+ * Restart the transcode pipeline from a new position in the source file.
+ * The caller must have already stopped the transcode thread.
+ * Returns 0 on success, -1 on failure.
+ */
+int
+media_restart_transcode(media_ctx_t *ctx, int start_sec)
+{
+	media_close_transcode_state(ctx);
+
+	ctx->start_sec = start_sec;
+	ctx->running = 1;
+
+	av_seek_frame(ctx->ifmt_ctx, -1,
+	    (int64_t)start_sec * AV_TIME_BASE, AVSEEK_FLAG_BACKWARD);
+
+	return media_open_transcode(ctx);
 }
 
 void

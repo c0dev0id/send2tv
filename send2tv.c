@@ -262,17 +262,17 @@ main(int argc, char *argv[])
 	/* Set URI and play */
 	printf("Sending media URL to TV...\n");
 	{
-		const char *title;
+		const char *t;
 
 		if (file != NULL) {
-			title = strrchr(file, '/');
-			title = (title != NULL) ? title + 1 : file;
+			t = strrchr(file, '/');
+			t = (t != NULL) ? t + 1 : file;
 		} else {
-			title = "Screen";
+			t = "Screen";
 		}
 
 		if (upnp_set_uri(&upnp, media_url, media.mime_type,
-		    title,
+		    t,
 		    media.mode == MODE_SCREEN || media.needs_transcode,
 		    media.dlna_profile) < 0)
 			goto shutdown;
@@ -296,8 +296,17 @@ main(int argc, char *argv[])
 		unsigned char	 buf[8];
 		ssize_t		 n;
 		int		 can_seek;
+		int		 delta;
+		const char	*title;
 
 		can_seek = (media.mode == MODE_FILE);
+
+		if (file != NULL) {
+			title = strrchr(file, '/');
+			title = (title != NULL) ? title + 1 : file;
+		} else {
+			title = "Screen";
+		}
 
 		pfd.fd = STDIN_FILENO;
 		pfd.events = POLLIN;
@@ -317,20 +326,64 @@ main(int argc, char *argv[])
 			}
 
 			/* Arrow keys: ESC [ A/B/C/D */
-			if (can_seek && n >= 3 &&
-			    buf[0] == 0x1b && buf[1] == '[') {
-				switch (buf[2]) {
-				case 'C':	/* Right: +10s */
-					upnp_seek_relative(&upnp, 10);
+			if (!can_seek || n < 3 ||
+			    buf[0] != 0x1b || buf[1] != '[')
+				continue;
+
+			delta = 0;
+			switch (buf[2]) {
+			case 'C': delta =  10; break;
+			case 'D': delta = -10; break;
+			case 'A': delta =  30; break;
+			case 'B': delta = -30; break;
+			}
+			if (delta == 0)
+				continue;
+
+			if (!media.needs_transcode) {
+				/* Direct file: TV handles seek */
+				upnp_seek_relative(&upnp, delta);
+			} else {
+				/* Transcoded: restart from new pos */
+				int pos, target;
+
+				if (upnp_get_position(&upnp, &pos) < 0)
+					continue;
+
+				target = media.start_sec + pos + delta;
+				if (target < 0)
+					target = 0;
+
+				DPRINTF("seek: restart transcode "
+				    "at %ds\n", target);
+
+				upnp_stop(&upnp);
+				media.running = 0;
+				pthread_join(media.thread, NULL);
+
+				if (media_restart_transcode(&media,
+				    target) < 0) {
+					fprintf(stderr,
+					    "Seek failed\n");
+					running = 0;
 					break;
-				case 'D':	/* Left: -10s */
-					upnp_seek_relative(&upnp, -10);
+				}
+
+				if (pthread_create(&media.thread,
+				    NULL, media_transcode_thread,
+				    &media) != 0) {
+					fprintf(stderr,
+					    "Failed to restart "
+					    "transcoding\n");
+					running = 0;
 					break;
-				case 'A':	/* Up: +30s */
-					upnp_seek_relative(&upnp, 30);
-					break;
-				case 'B':	/* Down: -30s */
-					upnp_seek_relative(&upnp, -30);
+				}
+
+				if (upnp_set_uri(&upnp, media_url,
+				    media.mime_type, title, 1,
+				    media.dlna_profile) < 0 ||
+				    upnp_play(&upnp) < 0) {
+					running = 0;
 					break;
 				}
 			}

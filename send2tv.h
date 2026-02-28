@@ -78,6 +78,7 @@ typedef struct {
 
 	volatile int	 running;
 	pthread_t	 thread;
+	int		 start_sec;	/* transcode start position */
 } media_ctx_t;
 
 /* UPnP context */
@@ -117,6 +118,7 @@ void	 httpd_stop(httpd_ctx_t *ctx);
 /* media.c */
 int	 media_probe(media_ctx_t *ctx, const char *filepath, int force_transcode);
 int	 media_open_transcode(media_ctx_t *ctx);
+int	 media_restart_transcode(media_ctx_t *ctx, int start_sec);
 int	 media_open_screen(media_ctx_t *ctx);
 void	*media_transcode_thread(void *arg);
 void	*media_capture_thread(void *arg);
