@@ -340,7 +340,7 @@ media_probe(media_ctx_t *ctx, const char *filepath, int force_transcode)
 			ctx->dlna_profile[0] = '\0';
 		else
 			strlcpy(ctx->dlna_profile,
-			    "AVC_TS_MP_HD_AAC_MULT5",
+			    "AVC_TS_HP_HD_AAC_MULT5",
 			    sizeof(ctx->dlna_profile));
 	}
 
@@ -669,7 +669,7 @@ init_video_encoder(media_ctx_t *ctx, int width, int height,
 			ctx->video_enc->profile = AV_PROFILE_HEVC_MAIN;
 			ctx->video_enc->level = 153; /* Level 5.1 */
 		} else {
-			ctx->video_enc->profile = AV_PROFILE_H264_MAIN;
+			ctx->video_enc->profile = AV_PROFILE_H264_HIGH;
 			ctx->video_enc->level = 41;
 		}
 		/* Minimize hardware encoder pipeline depth */
@@ -694,10 +694,10 @@ init_video_encoder(media_ctx_t *ctx, int width, int height,
 			    "1", 0);
 			av_opt_set(ctx->video_enc->priv_data, "nal-hrd",
 			    "cbr", 0);
-			ctx->video_enc->profile = AV_PROFILE_H264_MAIN;
+			ctx->video_enc->profile = AV_PROFILE_H264_HIGH;
 			ctx->video_enc->level = 41;
 			av_opt_set(ctx->video_enc->priv_data, "profile",
-			    "main", 0);
+			    "high", 0);
 		}
 	}
 

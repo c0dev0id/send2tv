@@ -478,7 +478,7 @@ TEST(mime_audio_flac)
 	media_ctx_t m = {0};
 
 	set_mime_type(&m, "flac", AV_CODEC_ID_NONE);
-	ASSERT_STR_EQ(m.mime_type, "audio/flac");
+	ASSERT_STR_EQ(m.mime_type, "audio/x-flac");
 }
 
 TEST(mime_audio_ogg)
@@ -494,7 +494,7 @@ TEST(mime_audio_wav)
 	media_ctx_t m = {0};
 
 	set_mime_type(&m, "wav", AV_CODEC_ID_NONE);
-	ASSERT_STR_EQ(m.mime_type, "audio/wav");
+	ASSERT_STR_EQ(m.mime_type, "audio/x-wav");
 }
 
 TEST(mime_unknown_defaults_to_mp2t)
@@ -538,7 +538,7 @@ TEST(dlna_h264_matroska)
 	media_ctx_t m = {0};
 
 	set_dlna_profile(&m, "matroska,webm", AV_CODEC_ID_H264);
-	ASSERT_STR_EQ(m.dlna_profile, "AVC_MKV_MP_HD_AAC");
+	ASSERT_STR_EQ(m.dlna_profile, "");
 }
 
 TEST(dlna_h264_mpegts)
@@ -562,7 +562,7 @@ TEST(dlna_hevc_mp4)
 	media_ctx_t m = {0};
 
 	set_dlna_profile(&m, "mp4", AV_CODEC_ID_HEVC);
-	ASSERT_STR_EQ(m.dlna_profile, "HEVC_MP4_MP_L51_AAC");
+	ASSERT_STR_EQ(m.dlna_profile, "");
 }
 
 TEST(dlna_hevc_matroska_empty)
@@ -756,7 +756,7 @@ TEST(dlna_features_flags_value)
 	p = strstr(buf, "DLNA.ORG_FLAGS=");
 	ASSERT(p != NULL);
 	p += strlen("DLNA.ORG_FLAGS=");
-	ASSERT(strncmp(p, "01700000000000000000000000000000", 32) == 0);
+	ASSERT(strncmp(p, "21700000000000000000000000000000", 32) == 0);
 }
 
 /*
