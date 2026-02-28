@@ -712,6 +712,238 @@ upnp_seek_relative(upnp_ctx_t *ctx, int delta_sec)
 }
 
 /*
+ * Query the TV's supported media formats via ConnectionManager GetProtocolInfo.
+ * The ConnectionManager service lives on the same device as AVTransport.
+ * Parses the Sink protocol info list and prints supported codecs/containers.
+ *
+ * If best_codec is not NULL, writes the best video codec name for transcoding
+ * into best_codec (one of "hevc", "h264", "mpeg4", or "" if unknown).
+ *
+ * Returns 0 on success, -1 on failure.
+ */
+int
+upnp_query_capabilities(upnp_ctx_t *ctx, int print, char *best_codec,
+    size_t best_codec_sz)
+{
+	int	 i, resp_len;
+	char	*desc = NULL;
+	char	*cm_start;
+	char	 cm_url[256];
+	char	 headers[512];
+	char	 envelope[SEND2TV_SOAP_BUF];
+	char	*resp;
+	char	*sink_start, *sink_end;
+	char	*line, *next;
+	int	 has_hevc = 0, has_h264 = 0, has_vp9 = 0;
+	int	 has_av1 = 0, has_mpeg4 = 0;
+
+	/* Fetch device description to find ConnectionManager controlURL */
+	for (i = 0; dmr_endpoints[i].path != NULL; i++) {
+		desc = http_request(ctx->tv_ip, dmr_endpoints[i].port,
+		    "GET", dmr_endpoints[i].path, NULL, NULL, &resp_len);
+		if (desc != NULL && resp_len > 0 &&
+		    strstr(desc, "ConnectionManager") != NULL)
+			break;
+		free(desc);
+		desc = NULL;
+	}
+
+	if (desc == NULL) {
+		fprintf(stderr, "Cannot find ConnectionManager service\n");
+		return -1;
+	}
+
+	/* Find ConnectionManager service block and extract controlURL */
+	cm_start = strstr(desc, "ConnectionManager");
+	if (cm_start == NULL) {
+		fprintf(stderr, "No ConnectionManager in device description\n");
+		free(desc);
+		return -1;
+	}
+
+	if (xml_extract(cm_start, "<controlURL>", "</controlURL>",
+	    cm_url, sizeof(cm_url)) < 0) {
+		fprintf(stderr, "Cannot find ConnectionManager controlURL\n");
+		free(desc);
+		return -1;
+	}
+	free(desc);
+
+	DPRINTF("upnp: ConnectionManager at %s:%d%s\n",
+	    ctx->tv_ip, ctx->tv_port, cm_url);
+
+	/* Send GetProtocolInfo SOAP request */
+	snprintf(headers, sizeof(headers),
+	    "Content-Type: text/xml; charset=\"utf-8\"\r\n"
+	    "SOAPAction: \"urn:schemas-upnp-org:service:"
+	    "ConnectionManager:1#GetProtocolInfo\"\r\n");
+
+	snprintf(envelope, sizeof(envelope),
+	    "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n"
+	    "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\""
+	    " s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">\r\n"
+	    "  <s:Body>\r\n"
+	    "    <u:GetProtocolInfo xmlns:u=\"urn:schemas-upnp-org:service:"
+	    "ConnectionManager:1\"/>\r\n"
+	    "  </s:Body>\r\n"
+	    "</s:Envelope>");
+
+	resp = http_request(ctx->tv_ip, ctx->tv_port, "POST",
+	    cm_url[0] == '/' ? cm_url : cm_url,
+	    headers, envelope, &resp_len);
+	if (resp == NULL) {
+		fprintf(stderr, "GetProtocolInfo failed: no response\n");
+		return -1;
+	}
+
+	if (strstr(resp, "Fault") != NULL) {
+		fprintf(stderr, "GetProtocolInfo SOAP fault\n");
+		DPRINTF("soap: response: %.*s\n", resp_len, resp);
+		free(resp);
+		return -1;
+	}
+
+	/* Extract the Sink value (what the TV can receive/play) */
+	sink_start = strstr(resp, "<Sink>");
+	if (sink_start == NULL)
+		sink_start = strstr(resp, "<Sink ");
+	if (sink_start == NULL) {
+		fprintf(stderr, "No Sink in GetProtocolInfo response\n");
+		free(resp);
+		return -1;
+	}
+	sink_start = strchr(sink_start, '>');
+	if (sink_start == NULL) {
+		free(resp);
+		return -1;
+	}
+	sink_start++;
+	sink_end = strstr(sink_start, "</Sink>");
+	if (sink_end == NULL) {
+		free(resp);
+		return -1;
+	}
+	*sink_end = '\0';
+
+	if (print)
+		printf("TV capabilities (%s):\n", ctx->tv_ip);
+
+	/*
+	 * Parse comma-separated protocol info entries.
+	 * Format: http-get:*:<mime>:<dlna_features>
+	 */
+	line = sink_start;
+	while (line != NULL && *line != '\0') {
+		char	*field1, *field2, *field3, *field4;
+		char	*p;
+
+		next = strchr(line, ',');
+		if (next != NULL)
+			*next++ = '\0';
+
+		/* Skip leading whitespace */
+		while (*line == ' ' || *line == '\t' || *line == '\n' ||
+		    *line == '\r')
+			line++;
+
+		if (*line == '\0') {
+			line = next;
+			continue;
+		}
+
+		/* Parse: transport:network:mime:features */
+		field1 = line;
+		p = strchr(field1, ':');
+		if (p == NULL) { line = next; continue; }
+		*p++ = '\0';
+
+		field2 = p;
+		p = strchr(field2, ':');
+		if (p == NULL) { line = next; continue; }
+		*p++ = '\0';
+
+		field3 = p;	/* MIME type */
+		p = strchr(field3, ':');
+		if (p != NULL) {
+			*p++ = '\0';
+			field4 = p;	/* DLNA features */
+		} else {
+			field4 = "";
+		}
+
+		(void)field1;
+		(void)field2;
+
+		if (print)
+			printf("  %-30s %s\n", field3, field4);
+
+		/* Track supported video codecs from MIME and DLNA profile */
+		if (strstr(field3, "video/") != NULL ||
+		    strstr(field4, "DLNA.ORG_PN=") != NULL) {
+			if (strcasestr(field4, "HEVC") != NULL ||
+			    strcasestr(field3, "hevc") != NULL ||
+			    strcasestr(field3, "h265") != NULL)
+				has_hevc = 1;
+			if (strcasestr(field4, "AVC") != NULL ||
+			    strcasestr(field3, "h264") != NULL ||
+			    strcasestr(field3, "avc") != NULL)
+				has_h264 = 1;
+			if (strcasestr(field4, "VP9") != NULL ||
+			    strcasestr(field3, "vp9") != NULL)
+				has_vp9 = 1;
+			if (strcasestr(field4, "AV1") != NULL ||
+			    strcasestr(field3, "av1") != NULL)
+				has_av1 = 1;
+			if (strcasestr(field4, "MPEG4") != NULL ||
+			    strcasestr(field3, "mpeg4") != NULL)
+				has_mpeg4 = 1;
+			/*
+			 * Also detect H.264 from common DLNA profile names
+			 * that contain "MP4" but not "MPEG4" (AVC profiles).
+			 */
+			if (strcasestr(field4, "MP4_") != NULL &&
+			    strcasestr(field4, "MPEG4") == NULL)
+				has_h264 = 1;
+		}
+
+		line = next;
+	}
+
+	free(resp);
+
+	if (print) {
+		printf("\nDetected video codec support:\n");
+		if (has_hevc) printf("  HEVC (H.265)\n");
+		if (has_h264) printf("  H.264 (AVC)\n");
+		if (has_vp9)  printf("  VP9\n");
+		if (has_av1)  printf("  AV1\n");
+		if (has_mpeg4) printf("  MPEG-4\n");
+		if (!has_hevc && !has_h264 && !has_vp9 &&
+		    !has_av1 && !has_mpeg4)
+			printf("  (none detected)\n");
+	}
+
+	/*
+	 * Choose the best transcode target codec.
+	 * Prefer HEVC for better quality at lower bitrates,
+	 * then H.264 as the safe universal fallback.
+	 */
+	if (best_codec != NULL) {
+		if (has_hevc)
+			strlcpy(best_codec, "hevc", best_codec_sz);
+		else if (has_h264)
+			strlcpy(best_codec, "h264", best_codec_sz);
+		else
+			strlcpy(best_codec, "h264", best_codec_sz);
+
+		if (print)
+			printf("\nBest transcode codec: %s\n", best_codec);
+	}
+
+	return 0;
+}
+
+/*
  * Determine the local IP address that can reach the TV.
  * Uses the UDP connect+getsockname trick.
  */
