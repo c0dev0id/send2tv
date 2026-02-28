@@ -18,6 +18,7 @@
 #include <libavdevice/avdevice.h>
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
+#include <libavutil/audio_fifo.h>
 
 #define SEND2TV_BUF_SIZE	65536
 #define SEND2TV_SOAP_BUF	8192
@@ -67,6 +68,7 @@ typedef struct {
 
 	/* audio resampling */
 	struct SwrContext *swr_ctx;
+	AVAudioFifo	*audio_fifo;
 
 	/* screen capture: second input for sndio audio */
 	AVFormatContext	*sndio_ctx;
