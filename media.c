@@ -540,6 +540,10 @@ init_output(media_ctx_t *ctx, int has_video, int has_audio)
 		return -1;
 	}
 
+	/* Reduce muxer latency: flush after each packet, no delay */
+	ctx->ofmt_ctx->flush_packets = 1;
+	ctx->ofmt_ctx->max_delay = 0;
+
 	/* Custom AVIO writing to the pipe */
 	avio_buf = av_malloc(SEND2TV_BUF_SIZE);
 	if (avio_buf == NULL)
@@ -644,6 +648,9 @@ init_video_encoder(media_ctx_t *ctx, int width, int height,
 		ctx->video_enc->bit_rate = 4000000;
 		ctx->video_enc->profile = AV_PROFILE_H264_HIGH;
 		ctx->video_enc->level = 41;
+		/* Minimize hardware encoder pipeline depth */
+		av_opt_set_int(ctx->video_enc->priv_data,
+		    "async_depth", 1, 0);
 	} else {
 		ctx->video_enc->pix_fmt = AV_PIX_FMT_YUV420P;
 		ctx->video_enc->bit_rate = 4000000;
@@ -926,6 +933,7 @@ media_open_screen(media_ctx_t *ctx)
 
 	ctx->ifmt_ctx->interrupt_callback.callback = ffmpeg_interrupt_cb;
 	ctx->ifmt_ctx->interrupt_callback.opaque = ctx;
+	ctx->ifmt_ctx->flags |= AVFMT_FLAG_NOBUFFER;
 
 	ret = avformat_find_stream_info(ctx->ifmt_ctx, NULL);
 	if (ret < 0) {
@@ -976,6 +984,7 @@ media_open_screen(media_ctx_t *ctx)
 			ctx->sndio_ctx->interrupt_callback.callback =
 			    ffmpeg_interrupt_cb;
 			ctx->sndio_ctx->interrupt_callback.opaque = ctx;
+			ctx->sndio_ctx->flags |= AVFMT_FLAG_NOBUFFER;
 			ret = avformat_find_stream_info(ctx->sndio_ctx,
 			    NULL);
 			if (ret < 0 ||
@@ -1129,7 +1138,7 @@ encode_video_frame(media_ctx_t *ctx, AVFrame *frame, int64_t *vid_pts,
 		av_packet_rescale_ts(pkt, ctx->video_enc->time_base,
 		    ctx->ofmt_ctx->streams[out_stream_idx]->time_base);
 		pkt->stream_index = out_stream_idx;
-		av_interleaved_write_frame(ctx->ofmt_ctx, pkt);
+		av_write_frame(ctx->ofmt_ctx, pkt);
 		av_packet_unref(pkt);
 	}
 	av_packet_free(&pkt);
@@ -1155,7 +1164,7 @@ encode_audio_frame(media_ctx_t *ctx, AVFrame *frame, int out_stream_idx)
 		av_packet_rescale_ts(pkt, ctx->audio_enc->time_base,
 		    ctx->ofmt_ctx->streams[out_stream_idx]->time_base);
 		pkt->stream_index = out_stream_idx;
-		av_interleaved_write_frame(ctx->ofmt_ctx, pkt);
+		av_write_frame(ctx->ofmt_ctx, pkt);
 		av_packet_unref(pkt);
 	}
 	av_packet_free(&pkt);
