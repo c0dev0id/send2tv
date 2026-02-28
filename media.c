@@ -21,11 +21,7 @@ ffmpeg_interrupt_cb(void *opaque)
  * Custom AVIO write callback: writes encoded data to a pipe fd.
  */
 static int
-#if LIBAVFORMAT_VERSION_MAJOR >= 61
 avio_write_pipe(void *opaque, const uint8_t *buf, int buf_size)
-#else
-avio_write_pipe(void *opaque, uint8_t *buf, int buf_size)
-#endif
 {
 	media_ctx_t	*ctx = opaque;
 	int		 total = 0;
@@ -564,7 +560,7 @@ init_video_encoder(media_ctx_t *ctx, int width, int height,
 		    av_buffer_ref(hw_frames_ref);
 		av_buffer_unref(&hw_frames_ref);
 		ctx->video_enc->bit_rate = 4000000;
-		ctx->video_enc->profile = FF_PROFILE_H264_HIGH;
+		ctx->video_enc->profile = AV_PROFILE_H264_HIGH;
 		ctx->video_enc->level = 41;
 	} else {
 		ctx->video_enc->pix_fmt = AV_PIX_FMT_YUV420P;
@@ -574,7 +570,7 @@ init_video_encoder(media_ctx_t *ctx, int width, int height,
 		av_opt_set(ctx->video_enc->priv_data, "tune",
 		    "zerolatency", 0);
 		av_opt_set(ctx->video_enc->priv_data, "refs", "3", 0);
-		ctx->video_enc->profile = FF_PROFILE_H264_HIGH;
+		ctx->video_enc->profile = AV_PROFILE_H264_HIGH;
 		ctx->video_enc->level = 41;
 		av_opt_set(ctx->video_enc->priv_data, "profile",
 		    "high", 0);
@@ -614,7 +610,6 @@ init_audio_encoder(media_ctx_t *ctx, int sample_rate, int channels)
 		return -1;
 
 	ctx->audio_enc->sample_rate = sample_rate;
-#if LIBAVCODEC_VERSION_MAJOR >= 61
 	{
 		const enum AVSampleFormat *sample_fmts = NULL;
 		int nb_sample_fmts = 0;
@@ -625,10 +620,6 @@ init_audio_encoder(media_ctx_t *ctx, int sample_rate, int channels)
 		    nb_sample_fmts > 0) ? sample_fmts[0] :
 		    AV_SAMPLE_FMT_FLTP;
 	}
-#else
-	ctx->audio_enc->sample_fmt = codec->sample_fmts ?
-	    codec->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
-#endif
 	ctx->audio_enc->bit_rate = 128000;
 	ctx->audio_enc->time_base = (AVRational){1, sample_rate};
 
