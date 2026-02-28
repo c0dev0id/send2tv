@@ -58,13 +58,12 @@ http_request(const char *host, int port, const char *method, const char *path,
 	addr.sin_port = htons(port);
 	memcpy(&addr.sin_addr, he->h_addr, he->h_length);
 
-	/* 5 second connect timeout via poll */
 	{
 		int ret;
 
 		/* set timeouts for connect */
 		struct timeval tv;
-		tv.tv_sec = 5;
+		tv.tv_sec = 10;
 		tv.tv_usec = 0;
 		setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 		setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
