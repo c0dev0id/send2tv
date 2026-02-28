@@ -199,7 +199,7 @@ set_mime_type(media_ctx_t *ctx, const char *fmt_name,
 			strlcpy(ctx->mime_type, "video/x-mkv",
 			    sizeof(ctx->mime_type));
 	} else if (strstr(fmt_name, "mpegts"))
-		strlcpy(ctx->mime_type, "video/mp2t",
+		strlcpy(ctx->mime_type, "video/mpeg",
 		    sizeof(ctx->mime_type));
 	else if (strstr(fmt_name, "mpeg"))
 		strlcpy(ctx->mime_type, "video/mpeg",
@@ -217,16 +217,16 @@ set_mime_type(media_ctx_t *ctx, const char *fmt_name,
 		strlcpy(ctx->mime_type, "audio/mpeg",
 		    sizeof(ctx->mime_type));
 	else if (strstr(fmt_name, "flac"))
-		strlcpy(ctx->mime_type, "audio/flac",
+		strlcpy(ctx->mime_type, "audio/x-flac",
 		    sizeof(ctx->mime_type));
 	else if (strstr(fmt_name, "ogg"))
 		strlcpy(ctx->mime_type, "audio/ogg",
 		    sizeof(ctx->mime_type));
 	else if (strstr(fmt_name, "wav"))
-		strlcpy(ctx->mime_type, "audio/wav",
+		strlcpy(ctx->mime_type, "audio/x-wav",
 		    sizeof(ctx->mime_type));
 	else
-		strlcpy(ctx->mime_type, "video/mp2t",
+		strlcpy(ctx->mime_type, "video/mpeg",
 		    sizeof(ctx->mime_type));
 }
 
@@ -245,19 +245,19 @@ set_dlna_profile(media_ctx_t *ctx, const char *fmt_name,
 		if (strstr(fmt_name, "mp4") || strstr(fmt_name, "mov") ||
 		    strstr(fmt_name, "3gp"))
 			pn = "AVC_MP4_MP_SD_AAC";
-		else if (strstr(fmt_name, "matroska"))
-			pn = "AVC_MKV_MP_HD_AAC";
 		else if (strstr(fmt_name, "mpegts"))
 			pn = "AVC_TS_MP_SD_AAC_MULT5";
 		else if (strstr(fmt_name, "avi"))
 			pn = "AVC_MP4_MP_SD_AAC";
+		/* MKV: no standard DLNA profile, leave empty */
 		break;
 	case AV_CODEC_ID_HEVC:
-		if (strstr(fmt_name, "mp4") || strstr(fmt_name, "mov"))
-			pn = "HEVC_MP4_MP_L51_AAC";
+		/* TV has no HEVC DLNA profiles, leave empty */
 		break;
 	case AV_CODEC_ID_MPEG4:
-		pn = "MPEG4_P2_MP4_SP_AAC";
+		if (strstr(fmt_name, "mp4") || strstr(fmt_name, "mov") ||
+		    strstr(fmt_name, "3gp"))
+			pn = "MPEG4_P2_MP4_SP_AAC";
 		break;
 	default:
 		break;
@@ -334,15 +334,13 @@ media_probe(media_ctx_t *ctx, const char *filepath, int force_transcode)
 		set_mime_type(ctx, fmt_name, vid_codec);
 		set_dlna_profile(ctx, fmt_name, vid_codec);
 	} else {
-		strlcpy(ctx->mime_type, "video/mp2t",
+		strlcpy(ctx->mime_type, "video/mpeg",
 		    sizeof(ctx->mime_type));
 		if (ctx->vcodec == VCODEC_HEVC)
-			strlcpy(ctx->dlna_profile,
-			    "HEVC_TS_HD_NA",
-			    sizeof(ctx->dlna_profile));
+			ctx->dlna_profile[0] = '\0';
 		else
 			strlcpy(ctx->dlna_profile,
-			    "AVC_TS_HP_HD_AAC_MULT5",
+			    "AVC_TS_MP_HD_AAC_MULT5",
 			    sizeof(ctx->dlna_profile));
 	}
 
@@ -671,7 +669,7 @@ init_video_encoder(media_ctx_t *ctx, int width, int height,
 			ctx->video_enc->profile = AV_PROFILE_HEVC_MAIN;
 			ctx->video_enc->level = 153; /* Level 5.1 */
 		} else {
-			ctx->video_enc->profile = AV_PROFILE_H264_HIGH;
+			ctx->video_enc->profile = AV_PROFILE_H264_MAIN;
 			ctx->video_enc->level = 41;
 		}
 		/* Minimize hardware encoder pipeline depth */
@@ -696,10 +694,10 @@ init_video_encoder(media_ctx_t *ctx, int width, int height,
 			    "1", 0);
 			av_opt_set(ctx->video_enc->priv_data, "nal-hrd",
 			    "cbr", 0);
-			ctx->video_enc->profile = AV_PROFILE_H264_HIGH;
+			ctx->video_enc->profile = AV_PROFILE_H264_MAIN;
 			ctx->video_enc->level = 41;
 			av_opt_set(ctx->video_enc->priv_data, "profile",
-			    "high", 0);
+			    "main", 0);
 		}
 	}
 
@@ -929,7 +927,7 @@ media_open_transcode(media_ctx_t *ctx)
 	if (init_output(ctx, ctx->video_idx >= 0, has_audio) < 0)
 		return -1;
 
-	strlcpy(ctx->mime_type, "video/mp2t", sizeof(ctx->mime_type));
+	strlcpy(ctx->mime_type, "video/mpeg", sizeof(ctx->mime_type));
 
 	return 0;
 }
@@ -1152,12 +1150,11 @@ media_open_screen(media_ctx_t *ctx)
 		return -1;
 
 	ctx->needs_transcode = 1;
-	strlcpy(ctx->mime_type, "video/mp2t", sizeof(ctx->mime_type));
+	strlcpy(ctx->mime_type, "video/mpeg", sizeof(ctx->mime_type));
 	if (ctx->vcodec == VCODEC_HEVC)
-		strlcpy(ctx->dlna_profile, "HEVC_TS_HD_NA",
-		    sizeof(ctx->dlna_profile));
+		ctx->dlna_profile[0] = '\0';
 	else
-		strlcpy(ctx->dlna_profile, "AVC_TS_HP_HD_AAC_MULT5",
+		strlcpy(ctx->dlna_profile, "AVC_TS_MP_HD_AAC_MULT5",
 		    sizeof(ctx->dlna_profile));
 
 	return 0;
