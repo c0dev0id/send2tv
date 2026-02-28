@@ -166,11 +166,18 @@ media_probe(media_ctx_t *ctx, const char *filepath)
 		    container_ok(fmt_name));
 	}
 
+	DPRINTF("media: format=%s, video=%s, audio=%s\n", fmt_name,
+	    vid_codec != AV_CODEC_ID_NONE ? avcodec_get_name(vid_codec) : "none",
+	    aud_codec != AV_CODEC_ID_NONE ? avcodec_get_name(aud_codec) : "none");
+
 	if (!ctx->needs_transcode)
 		set_mime_type(ctx, fmt_name);
 	else
 		strlcpy(ctx->mime_type, "video/mp2t",
 		    sizeof(ctx->mime_type));
+
+	DPRINTF("media: needs_transcode=%d, mime=%s\n",
+	    ctx->needs_transcode, ctx->mime_type);
 
 	/* Keep format context open if we need to transcode */
 	if (ctx->needs_transcode) {
@@ -200,6 +207,7 @@ init_vaapi(media_ctx_t *ctx)
 		return -1;
 	}
 
+	DPRINTF("media: VAAPI initialized on /dev/dri/renderD128\n");
 	return 0;
 }
 
@@ -251,6 +259,8 @@ init_video_filters(media_ctx_t *ctx, int width, int height,
 		snprintf(filter_descr, sizeof(filter_descr),
 		    "format=yuv420p");
 	}
+
+	DPRINTF("media: filter graph: %s\n", filter_descr);
 
 	inputs = avfilter_inout_alloc();
 	outputs = avfilter_inout_alloc();
@@ -305,6 +315,9 @@ init_output(media_ctx_t *ctx, int has_video, int has_audio)
 	}
 	ctx->pipe_rd = pipefd[0];
 	ctx->pipe_wr = pipefd[1];
+
+	DPRINTF("media: output pipe created (rd=%d, wr=%d)\n",
+	    ctx->pipe_rd, ctx->pipe_wr);
 
 	ret = avformat_alloc_output_context2(&ctx->ofmt_ctx, NULL,
 	    "mpegts", NULL);
@@ -432,6 +445,9 @@ init_video_encoder(media_ctx_t *ctx, int width, int height,
 		return -1;
 	}
 
+	DPRINTF("media: video encoder: %s, %dx%d\n",
+	    codec->name, width, height);
+
 	return 0;
 }
 
@@ -471,6 +487,9 @@ init_audio_encoder(media_ctx_t *ctx, int sample_rate, int channels)
 		    av_err2str(ret));
 		return -1;
 	}
+
+	DPRINTF("media: audio encoder: %s, %dHz, %dch\n",
+	    codec->name, sample_rate, channels);
 
 	return 0;
 }
@@ -678,6 +697,8 @@ media_open_screen(media_ctx_t *ctx)
 	width = st->codecpar->width;
 	height = st->codecpar->height;
 
+	DPRINTF("media: screen capture %dx%d\n", width, height);
+
 	/* Open x11grab decoder */
 	dec = avcodec_find_decoder(st->codecpar->codec_id);
 	if (dec == NULL) {
@@ -724,6 +745,9 @@ media_open_screen(media_ctx_t *ctx)
 		fprintf(stderr, "sndio input not available "
 		    "(continuing without audio)\n");
 	}
+
+	DPRINTF("media: sndio audio capture %s\n",
+	    ctx->sndio_ctx ? "active" : "unavailable");
 
 	/* Init VAAPI */
 	use_vaapi = 0;
@@ -949,6 +973,8 @@ media_transcode_thread(void *arg)
 	int64_t		 audio_pts = 0;
 	int		 audio_out_idx;
 
+	DPRINTF("media: transcode thread started\n");
+
 	ret = avformat_write_header(ctx->ofmt_ctx, NULL);
 	if (ret < 0) {
 		fprintf(stderr, "Cannot write header: %s\n",
@@ -985,6 +1011,7 @@ media_transcode_thread(void *arg)
 	close(ctx->pipe_wr);
 	ctx->pipe_wr = -1;
 
+	DPRINTF("media: transcode thread finished\n");
 	return NULL;
 }
 
@@ -1000,6 +1027,8 @@ media_capture_thread(void *arg)
 	int64_t		 vid_pts = 0;
 	int64_t		 audio_pts = 0;
 	int		 audio_out_idx = 1;
+
+	DPRINTF("media: capture thread started\n");
 
 	ret = avformat_write_header(ctx->ofmt_ctx, NULL);
 	if (ret < 0) {
@@ -1054,6 +1083,7 @@ media_capture_thread(void *arg)
 	close(ctx->pipe_wr);
 	ctx->pipe_wr = -1;
 
+	DPRINTF("media: capture thread finished\n");
 	return NULL;
 }
 

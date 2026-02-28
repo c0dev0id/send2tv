@@ -99,6 +99,8 @@ http_request(const char *host, int port, const char *method, const char *path,
 		    method, path, host, port,
 		    extra_headers ? extra_headers : "");
 
+	DPRINTF("http: %s %s:%d%s\n", method, host, port, path);
+
 	if (send(sock, req, n, 0) != n) {
 		close(sock);
 		return NULL;
@@ -125,6 +127,8 @@ http_request(const char *host, int port, const char *method, const char *path,
 	}
 	buf[buf_len] = '\0';
 	close(sock);
+
+	DPRINTF("http: got %d bytes from %s:%d\n", buf_len, host, port);
 
 	/* Find body (after \r\n\r\n) */
 	body_start = strstr(buf, "\r\n\r\n");
@@ -216,6 +220,7 @@ upnp_discover(void)
 		return 0;
 	}
 
+	DPRINTF("ssdp: sent M-SEARCH to %s:%d\n", SSDP_ADDR, SSDP_PORT);
 	printf("Searching for TVs...\n");
 
 	/* Collect responses for SSDP_MX + 1 seconds */
@@ -241,6 +246,8 @@ upnp_discover(void)
 		if (loc_end == NULL)
 			continue;
 		*loc_end = '\0';
+
+		DPRINTF("ssdp: response LOCATION: %s\n", loc);
 
 		/* Parse host and port from LOCATION URL */
 		char loc_host[64] = {0};
@@ -271,6 +278,7 @@ upnp_discover(void)
 		inet_ntop(AF_INET, &from_addr.sin_addr,
 		    ip_str, sizeof(ip_str));
 
+		DPRINTF("ssdp: %s model=%s\n", friendly, model);
 		printf("  %-16s %s", ip_str, friendly);
 		if (model[0] != '\0')
 			printf(" (%s)", model);
@@ -300,6 +308,8 @@ upnp_find_transport(upnp_ctx_t *ctx)
 	char	 ctrl_url[254];
 
 	for (i = 0; dmr_endpoints[i].path != NULL; i++) {
+		DPRINTF("upnp: trying %s:%d%s\n", ctx->tv_ip,
+		    dmr_endpoints[i].port, dmr_endpoints[i].path);
 		desc = http_request(ctx->tv_ip, dmr_endpoints[i].port,
 		    "GET", dmr_endpoints[i].path, NULL, NULL, &resp_len);
 		if (desc != NULL && resp_len > 0 &&
@@ -343,6 +353,9 @@ upnp_find_transport(upnp_ctx_t *ctx)
 	else
 		snprintf(ctx->control_url, sizeof(ctx->control_url),
 		    "/%s", ctrl_url);
+
+	DPRINTF("upnp: AVTransport at %s:%d%s\n", ctx->tv_ip,
+	    ctx->tv_port, ctx->control_url);
 
 	free(desc);
 	return 0;
@@ -416,6 +429,9 @@ soap_action(upnp_ctx_t *ctx, const char *action, const char *body_xml)
 	    "</s:Envelope>",
 	    body_xml);
 
+	DPRINTF("soap: %s -> %s:%d%s\n", action, ctx->tv_ip,
+	    ctx->tv_port, ctx->control_url);
+
 	resp = http_request(ctx->tv_ip, ctx->tv_port, "POST",
 	    ctx->control_url, headers, envelope, &resp_len);
 	if (resp == NULL) {
@@ -426,6 +442,7 @@ soap_action(upnp_ctx_t *ctx, const char *action, const char *body_xml)
 	/* Check for SOAP fault */
 	if (strstr(resp, "Fault") != NULL) {
 		fprintf(stderr, "SOAP %s fault\n", action);
+		DPRINTF("soap: response: %.*s\n", resp_len, resp);
 		free(resp);
 		return -1;
 	}

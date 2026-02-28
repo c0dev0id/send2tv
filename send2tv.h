@@ -1,6 +1,7 @@
 #ifndef SEND2TV_H
 #define SEND2TV_H
 
+#include <stdio.h>
 #include <stdint.h>
 #include <pthread.h>
 
@@ -20,6 +21,10 @@
 #define SEND2TV_BUF_SIZE	65536
 #define SEND2TV_SOAP_BUF	8192
 #define SEND2TV_DEFAULT_PORT	0	/* ephemeral */
+
+extern int verbose;
+#define DPRINTF(fmt, ...) \
+	do { if (verbose) fprintf(stderr, "debug: " fmt, ##__VA_ARGS__); } while (0)
 
 /* Media mode */
 enum {
