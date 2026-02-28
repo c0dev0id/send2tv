@@ -211,7 +211,8 @@ main(int argc, char *argv[])
 	/* Set URI and play */
 	printf("Sending media URL to TV...\n");
 	if (upnp_set_uri(&upnp, media_url, media.mime_type,
-	    file ? file : "Screen") < 0)
+	    file ? file : "Screen",
+	    media.mode == MODE_SCREEN || media.needs_transcode) < 0)
 		goto shutdown;
 
 	if (!running)

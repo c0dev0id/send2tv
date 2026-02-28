@@ -455,7 +455,7 @@ soap_action(upnp_ctx_t *ctx, const char *action, const char *body_xml)
  */
 int
 upnp_set_uri(upnp_ctx_t *ctx, const char *uri, const char *mime,
-    const char *title)
+    const char *title, int is_streaming)
 {
 	char	 didl[2048];
 	char	*didl_encoded;
@@ -469,11 +469,16 @@ upnp_set_uri(upnp_ctx_t *ctx, const char *uri, const char *mime,
 	    "<dc:title>%s</dc:title>"
 	    "<upnp:class>object.item.videoItem</upnp:class>"
 	    "<res protocolInfo=\"http-get:*:%s:"
-	    "DLNA.ORG_OP=01;DLNA.ORG_CI=0;"
-	    "DLNA.ORG_FLAGS=01700000000000000000000000000000\">%s</res>"
+	    "%s\">%s</res>"
 	    "</item>"
 	    "</DIDL-Lite>",
-	    title, mime, uri);
+	    title, mime,
+	    is_streaming ?
+	    "DLNA.ORG_OP=00;DLNA.ORG_CI=1;"
+	    "DLNA.ORG_FLAGS=01700000000000000000000000000000" :
+	    "DLNA.ORG_OP=01;DLNA.ORG_CI=0;"
+	    "DLNA.ORG_FLAGS=01700000000000000000000000000000",
+	    uri);
 
 	didl_encoded = xml_encode(didl);
 	if (didl_encoded == NULL)
