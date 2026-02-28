@@ -340,7 +340,7 @@ media_probe(media_ctx_t *ctx, const char *filepath, int force_transcode)
 			ctx->dlna_profile[0] = '\0';
 		else
 			strlcpy(ctx->dlna_profile,
-			    "AVC_TS_HP_HD_AAC_MULT5",
+			    "AVC_TS_MP_SD_AAC_MULT5",
 			    sizeof(ctx->dlna_profile));
 	}
 
@@ -550,7 +550,6 @@ init_output(media_ctx_t *ctx, int has_video, int has_audio)
 	/* Reduce muxer latency: flush after each packet, no delay */
 	ctx->ofmt_ctx->flush_packets = 1;
 	ctx->ofmt_ctx->max_delay = 0;
-	ctx->ofmt_ctx->max_interleave_delta = 0;
 	/* Resend PAT/PMT and codec params so the TV can lock on faster */
 	av_opt_set(ctx->ofmt_ctx->priv_data, "mpegts_flags",
 	    "+resend_headers", AV_OPT_SEARCH_CHILDREN);
