@@ -21,6 +21,7 @@
 #include <libavutil/audio_fifo.h>
 
 #define SEND2TV_BUF_SIZE	65536
+#define SEND2TV_AVIO_SIZE	4096
 #define SEND2TV_SOAP_BUF	8192
 #define SEND2TV_DEFAULT_PORT	0	/* ephemeral */
 
@@ -39,6 +40,7 @@ typedef struct {
 	int		 mode;		/* MODE_FILE or MODE_SCREEN */
 	const char	*filepath;	/* NULL in screen mode */
 	int		 needs_transcode;
+	int		 bitrate;	/* video bitrate in kbps */
 	char		 mime_type[64];
 	char		 dlna_profile[64]; /* DLNA.ORG_PN value */
 
