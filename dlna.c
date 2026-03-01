@@ -20,19 +20,15 @@ build_dlna_features(char *buf, size_t buflen, const char *dlna_profile,
 		snprintf(buf, buflen,
 		    "DLNA.ORG_PN=%s;DLNA.ORG_OP=%s;DLNA.ORG_CI=%s;"
 		    "DLNA.ORG_FLAGS="
-		    "%s",
+		    "01700000000000000000000000000000",
 		    dlna_profile,
 		    is_streaming ? "00" : "01",
-		    is_streaming ? "1" : "0",
-		    is_streaming ? "01700000000000000000000000000000"
-		                 : "21700000000000000000000000000000");
+		    is_streaming ? "1" : "0");
 	else
 		snprintf(buf, buflen,
 		    "DLNA.ORG_OP=%s;DLNA.ORG_CI=%s;"
 		    "DLNA.ORG_FLAGS="
-		    "%s",
+		    "01700000000000000000000000000000",
 		    is_streaming ? "00" : "01",
-		    is_streaming ? "1" : "0",
-		    is_streaming ? "01700000000000000000000000000000"
-		                 : "21700000000000000000000000000000");
+		    is_streaming ? "1" : "0");
 }
