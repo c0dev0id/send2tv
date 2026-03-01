@@ -217,13 +217,13 @@ set_mime_type(media_ctx_t *ctx, const char *fmt_name,
 		strlcpy(ctx->mime_type, "audio/mpeg",
 		    sizeof(ctx->mime_type));
 	else if (strstr(fmt_name, "flac"))
-		strlcpy(ctx->mime_type, "audio/x-flac",
+		strlcpy(ctx->mime_type, "audio/flac",
 		    sizeof(ctx->mime_type));
 	else if (strstr(fmt_name, "ogg"))
 		strlcpy(ctx->mime_type, "audio/ogg",
 		    sizeof(ctx->mime_type));
 	else if (strstr(fmt_name, "wav"))
-		strlcpy(ctx->mime_type, "audio/x-wav",
+		strlcpy(ctx->mime_type, "audio/wav",
 		    sizeof(ctx->mime_type));
 	else
 		strlcpy(ctx->mime_type, "video/mp2t",
@@ -245,19 +245,19 @@ set_dlna_profile(media_ctx_t *ctx, const char *fmt_name,
 		if (strstr(fmt_name, "mp4") || strstr(fmt_name, "mov") ||
 		    strstr(fmt_name, "3gp"))
 			pn = "AVC_MP4_MP_SD_AAC";
+		else if (strstr(fmt_name, "matroska"))
+			pn = "AVC_MKV_MP_HD_AAC";
 		else if (strstr(fmt_name, "mpegts"))
 			pn = "AVC_TS_MP_SD_AAC_MULT5";
 		else if (strstr(fmt_name, "avi"))
 			pn = "AVC_MP4_MP_SD_AAC";
-		/* MKV: no standard DLNA profile, leave empty */
 		break;
 	case AV_CODEC_ID_HEVC:
-		/* TV has no HEVC DLNA profiles, leave empty */
+		if (strstr(fmt_name, "mp4") || strstr(fmt_name, "mov"))
+			pn = "HEVC_MP4_MP_L51_AAC";
 		break;
 	case AV_CODEC_ID_MPEG4:
-		if (strstr(fmt_name, "mp4") || strstr(fmt_name, "mov") ||
-		    strstr(fmt_name, "3gp"))
-			pn = "MPEG4_P2_MP4_SP_AAC";
+		pn = "MPEG4_P2_MP4_SP_AAC";
 		break;
 	default:
 		break;
@@ -336,12 +336,8 @@ media_probe(media_ctx_t *ctx, const char *filepath, int force_transcode)
 	} else {
 		strlcpy(ctx->mime_type, "video/mp2t",
 		    sizeof(ctx->mime_type));
-		if (ctx->vcodec == VCODEC_HEVC)
-			ctx->dlna_profile[0] = '\0';
-		else
-			strlcpy(ctx->dlna_profile,
-			    "AVC_TS_MP_SD_AAC_MULT5",
-			    sizeof(ctx->dlna_profile));
+		strlcpy(ctx->dlna_profile, "AVC_TS_HP_HD_AAC_MULT5",
+		    sizeof(ctx->dlna_profile));
 	}
 
 	DPRINTF("media: needs_transcode=%d, mime=%s\n",
@@ -550,6 +546,7 @@ init_output(media_ctx_t *ctx, int has_video, int has_audio)
 	/* Reduce muxer latency: flush after each packet, no delay */
 	ctx->ofmt_ctx->flush_packets = 1;
 	ctx->ofmt_ctx->max_delay = 0;
+	ctx->ofmt_ctx->max_interleave_delta = 0;
 	/* Resend PAT/PMT and codec params so the TV can lock on faster */
 	av_opt_set(ctx->ofmt_ctx->priv_data, "mpegts_flags",
 	    "+resend_headers", AV_OPT_SEARCH_CHILDREN);
@@ -1150,11 +1147,8 @@ media_open_screen(media_ctx_t *ctx)
 
 	ctx->needs_transcode = 1;
 	strlcpy(ctx->mime_type, "video/mp2t", sizeof(ctx->mime_type));
-	if (ctx->vcodec == VCODEC_HEVC)
-		ctx->dlna_profile[0] = '\0';
-	else
-		strlcpy(ctx->dlna_profile, "AVC_TS_HP_HD_AAC_MULT5",
-		    sizeof(ctx->dlna_profile));
+	strlcpy(ctx->dlna_profile, "AVC_TS_HP_HD_AAC_MULT5",
+	    sizeof(ctx->dlna_profile));
 
 	return 0;
 }

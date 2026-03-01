@@ -478,7 +478,7 @@ TEST(mime_audio_flac)
 	media_ctx_t m = {0};
 
 	set_mime_type(&m, "flac", AV_CODEC_ID_NONE);
-	ASSERT_STR_EQ(m.mime_type, "audio/x-flac");
+	ASSERT_STR_EQ(m.mime_type, "audio/flac");
 }
 
 TEST(mime_audio_ogg)
@@ -494,7 +494,7 @@ TEST(mime_audio_wav)
 	media_ctx_t m = {0};
 
 	set_mime_type(&m, "wav", AV_CODEC_ID_NONE);
-	ASSERT_STR_EQ(m.mime_type, "audio/x-wav");
+	ASSERT_STR_EQ(m.mime_type, "audio/wav");
 }
 
 TEST(mime_unknown_defaults_to_mp2t)
@@ -538,7 +538,7 @@ TEST(dlna_h264_matroska)
 	media_ctx_t m = {0};
 
 	set_dlna_profile(&m, "matroska,webm", AV_CODEC_ID_H264);
-	ASSERT_STR_EQ(m.dlna_profile, "");
+	ASSERT_STR_EQ(m.dlna_profile, "AVC_MKV_MP_HD_AAC");
 }
 
 TEST(dlna_h264_mpegts)
@@ -562,7 +562,7 @@ TEST(dlna_hevc_mp4)
 	media_ctx_t m = {0};
 
 	set_dlna_profile(&m, "mp4", AV_CODEC_ID_HEVC);
-	ASSERT_STR_EQ(m.dlna_profile, "");
+	ASSERT_STR_EQ(m.dlna_profile, "HEVC_MP4_MP_L51_AAC");
 }
 
 TEST(dlna_hevc_matroska_empty)
@@ -756,7 +756,7 @@ TEST(dlna_features_flags_value)
 	p = strstr(buf, "DLNA.ORG_FLAGS=");
 	ASSERT(p != NULL);
 	p += strlen("DLNA.ORG_FLAGS=");
-	ASSERT(strncmp(p, "21700000000000000000000000000000", 32) == 0);
+	ASSERT(strncmp(p, "01700000000000000000000000000000", 32) == 0);
 }
 
 /*
@@ -817,10 +817,8 @@ TEST(dlna_features_field_order_no_profile)
 }
 
 /*
- * Transcode path: the hardcoded profile must be AVC_TS_MP_SD_AAC_MULT5.
- * This is the profile name the Samsung TV recognises in its whitelist.
- * The actual H.264 encoder output is High Profile, but the TV does not
- * cross-check the DLNA profile name against the stream content.
+ * Transcode path: the hardcoded profile must be AVC_TS_HP_HD_AAC_MULT5
+ * to match the H.264 High Profile encoder output.
  */
 TEST(dlna_transcode_profile_matches_encoder)
 {
@@ -828,8 +826,10 @@ TEST(dlna_transcode_profile_matches_encoder)
 
 	m.needs_transcode = 1;
 	strlcpy(m.mime_type, "video/mp2t", sizeof(m.mime_type));
-	strlcpy(m.dlna_profile, "AVC_TS_MP_SD_AAC_MULT5",
+	strlcpy(m.dlna_profile, "AVC_TS_HP_HD_AAC_MULT5",
 	    sizeof(m.dlna_profile));
+	/* HP = High Profile, matches AV_PROFILE_H264_HIGH in encoder */
+	ASSERT(strstr(m.dlna_profile, "HP") != NULL);
 	/* TS = MPEG-TS, matches the mpegts muxer */
 	ASSERT(strstr(m.dlna_profile, "TS") != NULL);
 	/* AAC audio */
@@ -872,9 +872,9 @@ TEST(dlna_screen_capture_profile)
 
 	m.needs_transcode = 1;
 	strlcpy(m.mime_type, "video/mp2t", sizeof(m.mime_type));
-	strlcpy(m.dlna_profile, "AVC_TS_MP_SD_AAC_MULT5",
+	strlcpy(m.dlna_profile, "AVC_TS_HP_HD_AAC_MULT5",
 	    sizeof(m.dlna_profile));
-	ASSERT_STR_EQ(m.dlna_profile, "AVC_TS_MP_SD_AAC_MULT5");
+	ASSERT_STR_EQ(m.dlna_profile, "AVC_TS_HP_HD_AAC_MULT5");
 	ASSERT_STR_EQ(m.mime_type, "video/mp2t");
 }
 
@@ -926,8 +926,8 @@ TEST(dlna_mpegts_direct_vs_transcode)
 	set_dlna_profile(&direct, "mpegts", AV_CODEC_ID_H264);
 	ASSERT_STR_EQ(direct.dlna_profile, "AVC_TS_MP_SD_AAC_MULT5");
 
-	/* Transcode also uses AVC_TS_MP_SD_AAC_MULT5 (same profile name) */
-	ASSERT_STR_EQ(direct.dlna_profile, "AVC_TS_MP_SD_AAC_MULT5");
+	/* Transcode uses AVC_TS_HP_HD_AAC_MULT5 (set by media_probe) */
+	ASSERT(strcmp(direct.dlna_profile, "AVC_TS_HP_HD_AAC_MULT5") != 0);
 }
 
 /* ------------------------------------------------------------------ */
