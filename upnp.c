@@ -143,19 +143,50 @@ http_request(const char *host, int port, const char *method, const char *path,
 		return NULL;
 	}
 
-	while ((n = recv(sock, buf + buf_len, buf_sz - buf_len - 1, 0)) > 0) {
-		buf_len += n;
-		if (buf_len >= buf_sz - 1) {
-			buf_sz *= 2;
-			buf = realloc(buf, buf_sz);
-			if (buf == NULL) {
-				close(sock);
-				return NULL;
+	{
+		int	 content_length = -1;
+		int	 headers_end = -1;	/* offset of first body byte */
+
+		while ((n = recv(sock, buf + buf_len,
+		    buf_sz - buf_len - 1, 0)) > 0) {
+			buf_len += n;
+			if (buf_len >= buf_sz - 1) {
+				buf_sz *= 2;
+				buf = realloc(buf, buf_sz);
+				if (buf == NULL) {
+					close(sock);
+					return NULL;
+				}
 			}
+
+			/* Once we have headers, parse Content-Length */
+			if (headers_end < 0) {
+				buf[buf_len] = '\0';
+				body_start = strstr(buf, "\r\n\r\n");
+				if (body_start != NULL) {
+					char *cl;
+
+					headers_end = (body_start - buf) + 4;
+					cl = strcasestr(buf,
+					    "\r\nContent-Length:");
+					if (cl != NULL &&
+					    cl < body_start) {
+						cl += 17;
+						while (*cl == ' ')
+							cl++;
+						content_length = atoi(cl);
+					}
+				}
+			}
+
+			/* Stop once we have the complete body */
+			if (headers_end >= 0 && content_length >= 0 &&
+			    buf_len - headers_end >= content_length)
+				break;
 		}
+		if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
+			DPRINTF("http: recv error: %s\n", strerror(errno));
 	}
-	if (n < 0)
-		DPRINTF("http: recv error: %s\n", strerror(errno));
 	buf[buf_len] = '\0';
 	close(sock);
 
@@ -224,7 +255,7 @@ upnp_discover(void)
 	    "HOST: 239.255.255.250:1900\r\n"
 	    "MAN: \"ssdp:discover\"\r\n"
 	    "MX: 3\r\n"
-	    "ST: urn:schemas-upnp-org:device:MediaRenderer:1\r\n"
+	    "ST: ssdp:all\r\n"
 	    "\r\n";
 
 	sock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -236,6 +267,49 @@ upnp_discover(void)
 	/* Allow reuse */
 	n = 1;
 	setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &n, sizeof(n));
+
+	/*
+	 * Determine the outgoing interface for multicast by connecting
+	 * a probe socket to the multicast address and reading back the
+	 * local address the kernel chose.  Then pin our socket to that
+	 * interface so the M-SEARCH goes out on the right link.
+	 */
+	{
+		int			 probe;
+		struct sockaddr_in	 dest, local;
+		socklen_t		 slen = sizeof(local);
+
+		probe = socket(AF_INET, SOCK_DGRAM, 0);
+		if (probe >= 0) {
+			memset(&dest, 0, sizeof(dest));
+			dest.sin_family = AF_INET;
+			dest.sin_port = htons(SSDP_PORT);
+			inet_pton(AF_INET, SSDP_ADDR, &dest.sin_addr);
+			if (connect(probe, (struct sockaddr *)&dest,
+			    sizeof(dest)) == 0 &&
+			    getsockname(probe, (struct sockaddr *)&local,
+			    &slen) == 0) {
+				setsockopt(sock, IPPROTO_IP,
+				    IP_MULTICAST_IF,
+				    &local.sin_addr,
+				    sizeof(local.sin_addr));
+				DPRINTF("ssdp: multicast if %s\n",
+				    inet_ntoa(local.sin_addr));
+			}
+			close(probe);
+		}
+	}
+
+	/* Bind so responses reach us on the assigned ephemeral port */
+	{
+		struct sockaddr_in	 bind_addr;
+
+		memset(&bind_addr, 0, sizeof(bind_addr));
+		bind_addr.sin_family = AF_INET;
+		bind_addr.sin_addr.s_addr = INADDR_ANY;
+		bind_addr.sin_port = 0;
+		bind(sock, (struct sockaddr *)&bind_addr, sizeof(bind_addr));
+	}
 
 	memset(&mcast_addr, 0, sizeof(mcast_addr));
 	mcast_addr.sin_family = AF_INET;
