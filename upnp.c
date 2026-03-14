@@ -428,6 +428,64 @@ upnp_discover(void)
 }
 
 /*
+ * Send a Wake-on-LAN magic packet to the TV's MAC address.
+ * ctx->tv_mac must be set (e.g. "aa:bb:cc:dd:ee:ff").
+ * Returns 0 on success, -1 on failure.
+ */
+int
+upnp_wake(upnp_ctx_t *ctx)
+{
+	unsigned char		 mac[6];
+	unsigned char		 pkt[102];
+	struct sockaddr_in	 addr;
+	int			 sock, i, broadcast = 1;
+
+	if (ctx->tv_mac[0] == '\0') {
+		fprintf(stderr, "Wake-on-LAN: no MAC address configured\n");
+		return -1;
+	}
+
+	if (sscanf(ctx->tv_mac,
+	    "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+	    &mac[0], &mac[1], &mac[2],
+	    &mac[3], &mac[4], &mac[5]) != 6) {
+		fprintf(stderr, "Wake-on-LAN: invalid MAC address: %s\n",
+		    ctx->tv_mac);
+		return -1;
+	}
+
+	/* Magic packet: 6 x 0xFF followed by 16 x MAC */
+	memset(pkt, 0xFF, 6);
+	for (i = 0; i < 16; i++)
+		memcpy(pkt + 6 + i * 6, mac, 6);
+
+	sock = socket(AF_INET, SOCK_DGRAM, 0);
+	if (sock < 0) {
+		perror("socket");
+		return -1;
+	}
+
+	setsockopt(sock, SOL_SOCKET, SO_BROADCAST,
+	    &broadcast, sizeof(broadcast));
+
+	memset(&addr, 0, sizeof(addr));
+	addr.sin_family = AF_INET;
+	addr.sin_port = htons(9);
+	addr.sin_addr.s_addr = INADDR_BROADCAST;
+
+	if (sendto(sock, pkt, sizeof(pkt), 0,
+	    (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+		perror("sendto");
+		close(sock);
+		return -1;
+	}
+
+	close(sock);
+	DPRINTF("wol: sent magic packet to %s\n", ctx->tv_mac);
+	return 0;
+}
+
+/*
  * Fetch the TV's device description and find the AVTransport control URL.
  * Populates ctx->tv_port and ctx->control_url.
  * Returns 0 on success, -1 on failure.

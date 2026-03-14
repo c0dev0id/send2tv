@@ -93,6 +93,7 @@ typedef struct {
 /* UPnP context */
 typedef struct {
 	char		 tv_ip[64];
+	char		 tv_mac[18];	/* for Wake-on-LAN, e.g. "aa:bb:cc:dd:ee:ff" */
 	int		 tv_port;
 	char		 control_url[256];
 	char		 local_ip[64];
@@ -114,6 +115,7 @@ void	 build_dlna_features(char *buf, size_t buflen,
 
 /* upnp.c */
 int	 upnp_discover(void);
+int	 upnp_wake(upnp_ctx_t *ctx);
 int	 upnp_find_transport(upnp_ctx_t *ctx);
 int	 upnp_set_uri(upnp_ctx_t *ctx, const char *uri, const char *mime,
 	    const char *title, int is_streaming, const char *dlna_profile);

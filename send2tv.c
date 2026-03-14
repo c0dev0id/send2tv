@@ -15,6 +15,7 @@ static int term_raw = 0;
 static char conf_host[256];
 static char conf_audiodev[64];
 static char conf_codec[32];
+static char conf_mac[18];
 
 static void
 term_restore(void)
@@ -88,7 +89,7 @@ sighandler(int sig)
 
 static void
 load_config(const char **host, const char **audiodev, int *port,
-    int *bitrate, int *transcode, const char **codec)
+    int *bitrate, int *transcode, const char **codec, const char **mac)
 {
 	FILE		*fp;
 	const char	*home;
@@ -199,6 +200,9 @@ load_config(const char **host, const char **audiodev, int *port,
 				    "%s:%d: codec: "
 				    "expected h264, hevc, or auto\n",
 				    path, lineno);
+		} else if (strcmp(key, "mac") == 0) {
+			strlcpy(conf_mac, val, sizeof(conf_mac));
+			*mac = conf_mac;
 		} else {
 			fprintf(stderr, "%s:%d: unknown key '%s'\n",
 			    path, lineno, key);
@@ -208,12 +212,46 @@ load_config(const char **host, const char **audiodev, int *port,
 	fclose(fp);
 }
 
+/*
+ * Connect to the TV's AVTransport service.
+ * If the initial attempt fails and a MAC address is configured,
+ * send a Wake-on-LAN packet and retry for up to 60 seconds.
+ * Returns 0 on success, -1 on failure.
+ */
+static int
+connect_to_tv(upnp_ctx_t *upnp)
+{
+	int	 t;
+
+	if (upnp_find_transport(upnp) == 0)
+		return 0;
+
+	if (upnp->tv_mac[0] == '\0')
+		return -1;
+
+	printf("TV not reachable, sending Wake-on-LAN to %s...\n",
+	    upnp->tv_mac);
+	if (upnp_wake(upnp) < 0)
+		return -1;
+
+	for (t = 5; t <= 60 && running; t += 5) {
+		printf("Waiting for TV... (%d/60s)\n", t);
+		sleep(5);
+		if (upnp_find_transport(upnp) == 0)
+			return 0;
+	}
+
+	fprintf(stderr, "TV did not respond after Wake-on-LAN\n");
+	return -1;
+}
+
 int
 main(int argc, char *argv[])
 {
 	const char	*host = NULL;
 	const char	*audiodev = "snd/mon";
 	const char	*codec = "auto";
+	const char	*mac = NULL;
 	int		 screen = 0;
 	int		 transcode = 0;
 	int		 discover = 0;
@@ -228,7 +266,7 @@ main(int argc, char *argv[])
 	media_ctx_t	 media;
 	char		 media_url[256];
 
-	load_config(&host, &audiodev, &port, &bitrate, &transcode, &codec);
+	load_config(&host, &audiodev, &port, &bitrate, &transcode, &codec, &mac);
 
 	while ((ch = getopt(argc, argv, "a:b:c:h:sp:dqvt")) != -1) {
 		switch (ch) {
@@ -330,6 +368,8 @@ main(int argc, char *argv[])
 	memset(&media, 0, sizeof(media));
 
 	strlcpy(upnp.tv_ip, host, sizeof(upnp.tv_ip));
+	if (mac != NULL)
+		strlcpy(upnp.tv_mac, mac, sizeof(upnp.tv_mac));
 	media.pipe_rd = -1;
 	media.pipe_wr = -1;
 	media.bitrate = bitrate;
@@ -351,7 +391,7 @@ main(int argc, char *argv[])
 
 		/* Find TV before setting up capture (need codec info) */
 		printf("Connecting to TV at %s...\n", upnp.tv_ip);
-		if (upnp_find_transport(&upnp) < 0)
+		if (connect_to_tv(&upnp) < 0)
 			return 1;
 		printf("AVTransport: %s:%d%s\n", upnp.tv_ip,
 		    upnp.tv_port, upnp.control_url);
@@ -493,7 +533,7 @@ main(int argc, char *argv[])
 
 	/* Find TV's AVTransport service (once) */
 	printf("Connecting to TV at %s...\n", upnp.tv_ip);
-	if (upnp_find_transport(&upnp) < 0) {
+	if (connect_to_tv(&upnp) < 0) {
 		httpd_stop(&httpd);
 		return 1;
 	}
