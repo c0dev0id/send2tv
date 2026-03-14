@@ -59,6 +59,7 @@ usage(void)
 	    "       send2tv [-av] [-b kbps] [-c codec] -h host -s\n"
 	    "       send2tv [-v] -d\n"
 	    "       send2tv [-v] -q -h host\n"
+	    "       send2tv [-v] -w\n"
 	    "\n"
 	    "  -h host   TV IP address or hostname\n"
 	    "  -t        force transcoding\n"
@@ -69,6 +70,7 @@ usage(void)
 	    "  -c codec  transcode video codec: h264, hevc (default: auto)\n"
 	    "  -p port   HTTP server port (default: auto)\n"
 	    "  -b kbps   video bitrate in kbps (default: 2000)\n"
+	    "  -w        send Wake-on-LAN packet to configured MAC\n"
 	    "  -v        verbose/debug output\n"
 	    "\n"
 	    "During playback:\n"
@@ -391,6 +393,7 @@ main(int argc, char *argv[])
 	int		 transcode = 0;
 	int		 discover = 0;
 	int		 query = 0;
+	int		 wol_only = 0;
 	int		 port = 0;
 	int		 bitrate = 2000;
 	int		 vcodec = VCODEC_H264;
@@ -403,7 +406,7 @@ main(int argc, char *argv[])
 
 	load_config(&host, &audiodev, &port, &bitrate, &transcode, &codec, &mac);
 
-	while ((ch = getopt(argc, argv, "a:b:c:h:sp:dqvt")) != -1) {
+	while ((ch = getopt(argc, argv, "a:b:c:h:sp:dqvtw")) != -1) {
 		switch (ch) {
 		case 'a':
 			audiodev = optarg;
@@ -447,12 +450,27 @@ main(int argc, char *argv[])
 		case 'v':
 			verbose = 1;
 			break;
+		case 'w':
+			wol_only = 1;
+			break;
 		default:
 			usage();
 		}
 	}
 	argc -= optind;
 	argv += optind;
+
+	/* Wake-on-LAN only */
+	if (wol_only) {
+		if (mac == NULL) {
+			fprintf(stderr, "No MAC address configured "
+			    "(add mac= to ~/.send2tv.conf)\n");
+			return 1;
+		}
+		memset(&upnp, 0, sizeof(upnp));
+		strlcpy(upnp.tv_mac, mac, sizeof(upnp.tv_mac));
+		return upnp_wake(&upnp) < 0 ? 1 : 0;
+	}
 
 	/* Discovery mode: interactive select, optionally overwrite config */
 	if (discover) {
