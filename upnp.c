@@ -332,6 +332,14 @@ upnp_discover(void)
 	pfd.fd = sock;
 	pfd.events = POLLIN;
 
+	/*
+	 * Track seen IPs to deduplicate: ssdp:all causes each device
+	 * to send one response per advertised service.
+	 */
+#define MAX_SEEN 32
+	char seen_ips[MAX_SEEN][INET_ADDRSTRLEN];
+	int  seen_count = 0;
+
 	while (poll(&pfd, 1, (SSDP_MX + 1) * 1000) > 0) {
 		from_len = sizeof(from_addr);
 		n = recvfrom(sock, buf, sizeof(buf) - 1, 0,
@@ -339,6 +347,21 @@ upnp_discover(void)
 		if (n <= 0)
 			break;
 		buf[n] = '\0';
+
+		char ip_str[INET_ADDRSTRLEN];
+		inet_ntop(AF_INET, &from_addr.sin_addr,
+		    ip_str, sizeof(ip_str));
+
+		/* Skip IPs we've already reported */
+		int i, already_seen = 0;
+		for (i = 0; i < seen_count; i++) {
+			if (strcmp(seen_ips[i], ip_str) == 0) {
+				already_seen = 1;
+				break;
+			}
+		}
+		if (already_seen)
+			continue;
 
 		/* Extract LOCATION header */
 		char *loc = strcasestr(buf, "LOCATION:");
@@ -371,7 +394,7 @@ upnp_discover(void)
 		if (desc == NULL)
 			continue;
 
-		char friendly[128] = "Unknown";
+		char friendly[128] = "";
 		char model[128] = "";
 		xml_extract(desc, "<friendlyName>", "</friendlyName>",
 		    friendly, sizeof(friendly));
@@ -379,17 +402,22 @@ upnp_discover(void)
 		    model, sizeof(model));
 		free(desc);
 
-		char ip_str[INET_ADDRSTRLEN];
-		inet_ntop(AF_INET, &from_addr.sin_addr,
-		    ip_str, sizeof(ip_str));
+		/* Skip entries with no useful name */
+		if (friendly[0] == '\0' && model[0] == '\0')
+			continue;
 
 		DPRINTF("ssdp: %s model=%s\n", friendly, model);
-		printf("  %-16s %s", ip_str, friendly);
-		if (model[0] != '\0')
+		printf("  %-16s %s", ip_str, friendly[0] ? friendly : model);
+		if (model[0] != '\0' && friendly[0] != '\0')
 			printf(" (%s)", model);
 		printf("\n");
+
+		if (seen_count < MAX_SEEN)
+			strlcpy(seen_ips[seen_count++], ip_str,
+			    INET_ADDRSTRLEN);
 		found++;
 	}
+#undef MAX_SEEN
 
 	close(sock);
 
