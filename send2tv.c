@@ -3,9 +3,11 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <ctype.h>
 #include <signal.h>
 #include <termios.h>
 #include <poll.h>
+#include <getopt.h>
 
 #include "send2tv.h"
 
@@ -60,6 +62,8 @@ usage(void)
 	    "       send2tv [-v] -d\n"
 	    "       send2tv [-v] -q -h host\n"
 	    "       send2tv [-v] -w\n"
+	    "       send2tv [-v] -h host --app\n"
+	    "       send2tv [-v] -h host --app <name>\n"
 	    "\n"
 	    "  -h host   TV IP address or hostname\n"
 	    "  -t        force transcoding\n"
@@ -71,6 +75,8 @@ usage(void)
 	    "  -p port   HTTP server port (default: auto)\n"
 	    "  -b kbps   video bitrate in kbps (default: 2000)\n"
 	    "  -w        send Wake-on-LAN packet to configured MAC\n"
+	    "  --app     list installed apps on the TV\n"
+	    "  --app <n> launch app whose name contains <n> (case-insensitive)\n"
 	    "  -v        verbose/debug output\n"
 	    "\n"
 	    "During playback:\n"
@@ -385,15 +391,21 @@ connect_to_tv(upnp_ctx_t *upnp)
 int
 main(int argc, char *argv[])
 {
+	static const struct option longopts[] = {
+		{ "app", optional_argument, NULL, 'A' },
+		{ NULL,  0,                 NULL,  0  }
+	};
 	const char	*host = NULL;
 	const char	*audiodev = "snd/mon";
 	const char	*codec = "auto";
 	const char	*mac = NULL;
+	const char	*app_name = NULL;
 	int		 screen = 0;
 	int		 transcode = 0;
 	int		 discover = 0;
 	int		 query = 0;
 	int		 wol_only = 0;
+	int		 app_mode = 0;
 	int		 port = 0;
 	int		 bitrate = 2000;
 	int		 vcodec = VCODEC_H264;
@@ -406,7 +418,8 @@ main(int argc, char *argv[])
 
 	load_config(&host, &audiodev, &port, &bitrate, &transcode, &codec, &mac);
 
-	while ((ch = getopt(argc, argv, "a:b:c:h:sp:dqvtw")) != -1) {
+	while ((ch = getopt_long(argc, argv, "a:b:c:h:sp:dqvtw",
+	    longopts, NULL)) != -1) {
 		switch (ch) {
 		case 'a':
 			audiodev = optarg;
@@ -453,6 +466,13 @@ main(int argc, char *argv[])
 		case 'w':
 			wol_only = 1;
 			break;
+		case 'A':
+			app_mode = 1;
+			if (optarg != NULL)
+				app_name = optarg;
+			else if (optind < argc && argv[optind][0] != '-')
+				app_name = argv[optind++];
+			break;
 		default:
 			usage();
 		}
@@ -470,6 +490,64 @@ main(int argc, char *argv[])
 		memset(&upnp, 0, sizeof(upnp));
 		strlcpy(upnp.tv_mac, mac, sizeof(upnp.tv_mac));
 		return upnp_wake(&upnp) < 0 ? 1 : 0;
+	}
+
+	/* App list / launch mode */
+	if (app_mode) {
+		app_entry_t	 apps[SAMSUNG_MAX_APPS];
+		int		 i, count;
+
+		if (host == NULL) {
+			fprintf(stderr,
+			    "--app requires a host (-h or config)\n");
+			return 1;
+		}
+		memset(&upnp, 0, sizeof(upnp));
+		strlcpy(upnp.tv_ip, host, sizeof(upnp.tv_ip));
+
+		count = upnp_list_apps(&upnp, apps, SAMSUNG_MAX_APPS);
+		if (count < 0) {
+			fprintf(stderr,
+			    "Failed to fetch app list from TV\n");
+			return 1;
+		}
+		if (count == 0) {
+			fprintf(stderr, "No apps returned by TV\n");
+			return 1;
+		}
+
+		if (app_name == NULL) {
+			/* List mode */
+			printf("Installed apps (%d):\n", count);
+			for (i = 0; i < count; i++)
+				printf("  %-32s %s\n",
+				    apps[i].name, apps[i].app_id);
+			return 0;
+		}
+
+		/* Launch mode: case-insensitive substring match */
+		for (i = 0; i < count; i++) {
+			char	 hay[128], needle[128];
+			char	*h, *n;
+
+			strlcpy(hay, apps[i].name, sizeof(hay));
+			strlcpy(needle, app_name, sizeof(needle));
+			for (h = hay; *h; h++)
+				*h = tolower((unsigned char)*h);
+			for (n = needle; *n; n++)
+				*n = tolower((unsigned char)*n);
+
+			if (strstr(hay, needle) != NULL) {
+				printf("Launching %s...\n", apps[i].name);
+				return upnp_launch_app(&upnp,
+				    apps[i].app_id) < 0 ? 1 : 0;
+			}
+		}
+
+		fprintf(stderr, "No app matching '%s' found. "
+		    "Run --app without a name to list all apps.\n",
+		    app_name);
+		return 1;
 	}
 
 	/* Discovery mode: interactive select, optionally overwrite config */

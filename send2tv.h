@@ -109,6 +109,13 @@ typedef struct {
 	pthread_t	 thread;
 } httpd_ctx_t;
 
+/* Samsung app entry */
+#define SAMSUNG_MAX_APPS	128
+typedef struct {
+	char	 app_id[64];
+	char	 name[128];
+} app_entry_t;
+
 /* Discovered UPnP device */
 #define UPNP_MAX_DEVICES	16
 typedef struct {
@@ -135,6 +142,8 @@ int	 upnp_seek(upnp_ctx_t *ctx, int target_sec);
 int	 upnp_seek_relative(upnp_ctx_t *ctx, int delta_sec);
 int	 upnp_query_capabilities(upnp_ctx_t *ctx, int print,
 	    char *best_codec, size_t best_codec_sz);
+int	 upnp_list_apps(upnp_ctx_t *ctx, app_entry_t *apps, int max_apps);
+int	 upnp_launch_app(upnp_ctx_t *ctx, const char *app_id);
 
 /* httpd.c */
 int	 httpd_start(httpd_ctx_t *ctx, media_ctx_t *media, int port);

@@ -1185,6 +1185,112 @@ upnp_query_capabilities(upnp_ctx_t *ctx, int print, char *best_codec,
 }
 
 /*
+ * Fetch the list of installed apps from the Samsung REST API
+ * (GET /api/v2/applications on port 8001).
+ * Populates apps[] with up to max_apps entries.
+ * Returns number of apps found, or -1 on error.
+ */
+int
+upnp_list_apps(upnp_ctx_t *ctx, app_entry_t *apps, int max_apps)
+{
+	char	*resp, *p, *data;
+	int	 resp_len, count = 0;
+
+	resp = http_request(ctx->tv_ip, 8001, "GET",
+	    "/api/v2/applications", NULL, NULL, &resp_len);
+	if (resp == NULL)
+		return -1;
+
+	/* Locate the "data":[ array */
+	data = strstr(resp, "\"data\":[");
+	if (data == NULL) {
+		free(resp);
+		return -1;
+	}
+	p = data + 8; /* skip past [ */
+
+	while (count < max_apps) {
+		char	 app_id[64] = "", name[128] = "";
+		char	*obj_start, *obj_end;
+		char	*id_p, *name_p, *end;
+		char	 saved;
+
+		obj_start = strchr(p, '{');
+		if (obj_start == NULL || obj_start[0] == ']')
+			break;
+
+		obj_end = strchr(obj_start + 1, '}');
+		if (obj_end == NULL)
+			break;
+
+		/*
+		 * Temporarily null-terminate after '}' so strstr
+		 * searches are bounded to this object only.
+		 */
+		saved = obj_end[1];
+		obj_end[1] = '\0';
+
+		id_p = strstr(obj_start, "\"appId\":\"");
+		if (id_p != NULL) {
+			id_p += 9;
+			end = strchr(id_p, '"');
+			if (end != NULL && end - id_p < (int)sizeof(app_id)) {
+				memcpy(app_id, id_p, end - id_p);
+				app_id[end - id_p] = '\0';
+			}
+		}
+
+		name_p = strstr(obj_start, "\"name\":\"");
+		if (name_p != NULL) {
+			name_p += 8;
+			end = strchr(name_p, '"');
+			if (end != NULL &&
+			    end - name_p < (int)sizeof(name)) {
+				memcpy(name, name_p, end - name_p);
+				name[end - name_p] = '\0';
+			}
+		}
+
+		obj_end[1] = saved;
+
+		if (app_id[0] != '\0' && name[0] != '\0') {
+			strlcpy(apps[count].app_id, app_id,
+			    sizeof(apps[count].app_id));
+			strlcpy(apps[count].name, name,
+			    sizeof(apps[count].name));
+			count++;
+		}
+
+		p = obj_end + 1;
+	}
+
+	free(resp);
+	return count;
+}
+
+/*
+ * Launch an app by its Samsung app ID via the REST API
+ * (POST /api/v2/applications/{appId} on port 8001).
+ * Returns 0 on success, -1 on failure.
+ */
+int
+upnp_launch_app(upnp_ctx_t *ctx, const char *app_id)
+{
+	char	 path[128];
+	char	*resp;
+	int	 resp_len;
+
+	snprintf(path, sizeof(path), "/api/v2/applications/%s", app_id);
+	resp = http_request(ctx->tv_ip, 8001, "POST", path,
+	    "Content-Type: application/json\r\n", "", &resp_len);
+	if (resp == NULL)
+		return -1;
+	DPRINTF("app: launch response: %.*s\n", resp_len, resp);
+	free(resp);
+	return 0;
+}
+
+/*
  * Determine the local IP address that can reach the TV.
  * Uses the UDP connect+getsockname trick.
  */
