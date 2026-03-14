@@ -8,6 +8,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <fcntl.h>
 #include <poll.h>
 
 #include "send2tv.h"
@@ -81,20 +82,50 @@ http_request(const char *host, int port, const char *method, const char *path,
 	memcpy(&addr.sin_addr, he->h_addr, he->h_length);
 
 	{
-		int ret;
+		struct timeval	 tv;
+		struct pollfd	 pfd;
+		int		 flags, ret, err;
+		socklen_t	 errlen;
 
-		/* set timeouts for connect */
-		struct timeval tv;
+		/* SO_RCVTIMEO covers recv() after we're connected */
 		tv.tv_sec = 10;
 		tv.tv_usec = 0;
 		setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-		setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+		/*
+		 * On OpenBSD SO_SNDTIMEO does not apply to connect(2).
+		 * Use a non-blocking connect + poll so we get a real
+		 * short timeout and don't stall for minutes when the
+		 * TV is off.
+		 */
+		flags = fcntl(sock, F_GETFL, 0);
+		fcntl(sock, F_SETFL, flags | O_NONBLOCK);
 
 		ret = connect(sock, (struct sockaddr *)&addr, sizeof(addr));
-		if (ret < 0) {
+		if (ret < 0 && errno != EINPROGRESS) {
 			close(sock);
 			return NULL;
 		}
+
+		if (ret != 0) {
+			pfd.fd = sock;
+			pfd.events = POLLOUT;
+			if (poll(&pfd, 1, 3000) <= 0) {
+				/* timeout or poll error */
+				close(sock);
+				return NULL;
+			}
+			err = 0;
+			errlen = sizeof(err);
+			if (getsockopt(sock, SOL_SOCKET, SO_ERROR,
+			    &err, &errlen) < 0 || err != 0) {
+				close(sock);
+				return NULL;
+			}
+		}
+
+		/* Restore blocking mode for subsequent send/recv */
+		fcntl(sock, F_SETFL, flags);
 	}
 
 	/* Build request */
