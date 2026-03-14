@@ -386,7 +386,8 @@ init_vaapi(media_ctx_t *ctx)
  */
 static int
 init_video_filters(media_ctx_t *ctx, int width, int height,
-    AVRational time_base, enum AVPixelFormat pix_fmt, int use_vaapi)
+    AVRational time_base, enum AVPixelFormat pix_fmt, int use_vaapi,
+    enum AVColorSpace color_space, enum AVColorRange color_range)
 {
 	char			 args[512];
 	const AVFilter		*buffersrc, *buffersink;
@@ -400,8 +401,10 @@ init_video_filters(media_ctx_t *ctx, int width, int height,
 	buffersink = avfilter_get_by_name("buffersink");
 
 	snprintf(args, sizeof(args),
-	    "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d",
-	    width, height, pix_fmt, time_base.num, time_base.den);
+	    "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d"
+	    ":colorspace=%d:range=%d",
+	    width, height, pix_fmt, time_base.num, time_base.den,
+	    (int)color_space, (int)color_range);
 
 	ret = avfilter_graph_create_filter(&ctx->buffersrc_ctx, buffersrc,
 	    "in", args, NULL, ctx->filter_graph);
@@ -583,6 +586,13 @@ init_output(media_ctx_t *ctx, int has_video, int has_audio)
 			return -1;
 		avcodec_parameters_from_context(out_st->codecpar,
 		    ctx->audio_enc);
+		/*
+		 * Zero initial_padding so the MPEG-TS muxer does not
+		 * backdate audio timestamps to account for AAC encoder
+		 * delay — MPEG-TS cannot carry negative timestamps and
+		 * our PTS sequence is already aligned with video at t=0.
+		 */
+		out_st->codecpar->initial_padding = 0;
 		out_st->time_base = ctx->audio_enc->time_base;
 	}
 
@@ -913,7 +923,9 @@ media_open_transcode(media_ctx_t *ctx)
 
 		/* Init video filter graph */
 		if (init_video_filters(ctx, width, height, tb,
-		    pix_fmt, use_vaapi) < 0) {
+		    pix_fmt, use_vaapi,
+		    ctx->video_dec->colorspace,
+		    ctx->video_dec->color_range) < 0) {
 			if (use_vaapi) {
 				fprintf(stderr, "VAAPI filters failed, "
 				    "trying software\n");
@@ -925,7 +937,9 @@ media_open_transcode(media_ctx_t *ctx)
 				    0) < 0)
 					return -1;
 				if (init_video_filters(ctx, width, height,
-				    tb, pix_fmt, 0) < 0)
+				    tb, pix_fmt, 0,
+				    ctx->video_dec->colorspace,
+				    ctx->video_dec->color_range) < 0)
 					return -1;
 			} else {
 				return -1;
@@ -1119,7 +1133,9 @@ media_open_screen(media_ctx_t *ctx)
 	/* Init video filter graph */
 	if (init_video_filters(ctx, width, height,
 	    ctx->ifmt_ctx->streams[0]->time_base,
-	    ctx->video_dec->pix_fmt, use_vaapi) < 0) {
+	    ctx->video_dec->pix_fmt, use_vaapi,
+	    ctx->video_dec->colorspace,
+	    ctx->video_dec->color_range) < 0) {
 		if (use_vaapi) {
 			fprintf(stderr, "VAAPI filters failed, "
 			    "trying software\n");
@@ -1131,7 +1147,9 @@ media_open_screen(media_ctx_t *ctx)
 				return -1;
 			if (init_video_filters(ctx, width, height,
 			    ctx->ifmt_ctx->streams[0]->time_base,
-			    ctx->video_dec->pix_fmt, 0) < 0)
+			    ctx->video_dec->pix_fmt, 0,
+			    ctx->video_dec->colorspace,
+			    ctx->video_dec->color_range) < 0)
 				return -1;
 		} else {
 			return -1;
