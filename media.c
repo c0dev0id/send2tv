@@ -741,7 +741,7 @@ init_audio_encoder(media_ctx_t *ctx, int sample_rate, int channels)
 		    nb_sample_fmts > 0) ? sample_fmts[0] :
 		    AV_SAMPLE_FMT_FLTP;
 	}
-	ctx->audio_enc->bit_rate = 128000;
+	ctx->audio_enc->bit_rate = channels * 64000; /* 64 kbps per channel */
 	ctx->audio_enc->time_base = (AVRational){1, sample_rate};
 
 	av_channel_layout_default(&ch_layout, channels);
@@ -770,19 +770,43 @@ init_audio_encoder(media_ctx_t *ctx, int sample_rate, int channels)
 
 /*
  * Set up audio resampler.
+ * If ctx->has_channelmap is set, treat the source channels as positionally
+ * ordered (using the default layout for that channel count) and apply the
+ * custom channel map so SWR routes each input position to the correct
+ * output position.  This fixes streams with channel_layout=unknown.
  */
 static int
 init_audio_resampler(media_ctx_t *ctx, AVCodecContext *dec)
 {
-	int ret;
+	AVChannelLayout	 src_layout;
+	int		 ret, use_default_src;
+
+	/*
+	 * When remapping we always want a concrete named source layout
+	 * so SWR can reason about input positions; UNSPEC won't work.
+	 * Even for non-UNSPEC sources, using the default positional layout
+	 * keeps the mapping indices unambiguous.
+	 */
+	use_default_src = ctx->has_channelmap;
+	if (use_default_src)
+		av_channel_layout_default(&src_layout,
+		    dec->ch_layout.nb_channels);
 
 	ret = swr_alloc_set_opts2(&ctx->swr_ctx,
 	    &ctx->audio_enc->ch_layout, ctx->audio_enc->sample_fmt,
 	    ctx->audio_enc->sample_rate,
-	    &dec->ch_layout, dec->sample_fmt, dec->sample_rate,
+	    use_default_src ? &src_layout : &dec->ch_layout,
+	    dec->sample_fmt, dec->sample_rate,
 	    0, NULL);
+
+	if (use_default_src)
+		av_channel_layout_uninit(&src_layout);
+
 	if (ret < 0)
 		return -1;
+
+	if (ctx->has_channelmap)
+		swr_set_channel_mapping(ctx->swr_ctx, ctx->channelmap);
 
 	ret = swr_init(ctx->swr_ctx);
 	if (ret < 0) {

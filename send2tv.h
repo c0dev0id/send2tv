@@ -88,6 +88,10 @@ typedef struct {
 	volatile int	 running;
 	pthread_t	 thread;
 	int		 start_sec;	/* transcode start position */
+
+	/* audio channel remapping (map[out] = in_index, -1 = silence) */
+	int		 channelmap[6];
+	int		 has_channelmap;
 } media_ctx_t;
 
 /* UPnP context */

@@ -20,6 +20,26 @@ static char conf_audiodev[64];
 static char conf_codec[32];
 static char conf_mac[18];
 
+/* Audio channel remapping presets.
+ * map[output_slot] = input_channel_index, matching the ffmpeg channelmap
+ * filter convention.  Output slot order: FL FR FC LFE BL BR. */
+typedef struct {
+	const char	*name;
+	const char	*desc;
+	int		 map[6];
+} channelmap_preset_t;
+
+static const channelmap_preset_t channelmap_presets[] = {
+	{ "mpeg",  "MPEG default    — FL FR FC LFE BL BR  (no change)", {0,1,2,3,4,5} },
+	{ "ac3",   "AC3/Dolby       — FL FC FR BL BR LFE",              {0,2,1,5,3,4} },
+	{ "ac3r",  "AC3 rear-swapped— FL FC FR BR BL LFE",              {0,2,1,5,4,3} },
+	{ "dts",   "DTS/some AAC    — FL FR BL BR FC LFE",              {0,1,4,5,2,3} },
+	{ "dtsr",  "Some MKV        — FL FR BL BR LFE FC",              {0,1,5,4,2,3} },
+	{ "aac6",  "MPEG-4 AAC ch6  — C  FL FR SL SR LFE",             {1,2,0,5,3,4} },
+	{ "aac6b", "Some AAC        — C  FL FR LFE BL BR",              {1,2,0,3,4,5} },
+	{ NULL, NULL, {0} }
+};
+
 static void
 term_restore(void)
 {
@@ -75,8 +95,10 @@ usage(void)
 	    "  -p port   HTTP server port (default: auto)\n"
 	    "  -b kbps   video bitrate in kbps (default: 2000)\n"
 	    "  -w        send Wake-on-LAN packet to configured MAC\n"
-	    "  --app     list installed apps on the TV\n"
-	    "  --app <n> launch app whose name contains <n> (case-insensitive)\n"
+	    "  --app          list installed apps on the TV\n"
+	    "  --app <n>      launch app whose name contains <n> (case-insensitive)\n"
+	    "  --channelmap   list 5.1 channel remapping presets\n"
+	    "  --channelmap <preset>  remap audio channels (forces transcode)\n"
 	    "  -v        verbose/debug output\n"
 	    "\n"
 	    "During playback:\n"
@@ -392,14 +414,17 @@ int
 main(int argc, char *argv[])
 {
 	static const struct option longopts[] = {
-		{ "app", optional_argument, NULL, 'A' },
-		{ NULL,  0,                 NULL,  0  }
+		{ "app",        optional_argument, NULL, 'A' },
+		{ "channelmap", optional_argument, NULL, 'M' },
+		{ NULL,         0,                 NULL,  0  }
 	};
 	const char	*host = NULL;
 	const char	*audiodev = "snd/mon";
 	const char	*codec = "auto";
 	const char	*mac = NULL;
 	const char	*app_name = NULL;
+	const char	*channelmap_arg = NULL;
+	int		 channelmap_mode = 0;
 	int		 screen = 0;
 	int		 transcode = 0;
 	int		 discover = 0;
@@ -472,6 +497,14 @@ main(int argc, char *argv[])
 				app_name = optarg;
 			else if (optind < argc && argv[optind][0] != '-')
 				app_name = argv[optind++];
+			break;
+		case 'M':
+			channelmap_mode = 1;
+			if (optarg != NULL)
+				channelmap_arg = optarg;
+			else if (optind < argc && argv[optind][0] != '-')
+				channelmap_arg = argv[optind++];
+			/* else NULL → list mode */
 			break;
 		default:
 			usage();
@@ -548,6 +581,39 @@ main(int argc, char *argv[])
 		    "Run --app without a name to list all apps.\n",
 		    app_name);
 		return 1;
+	}
+
+	/* Channel map: list presets or validate the chosen one */
+	if (channelmap_mode) {
+		const channelmap_preset_t	*p;
+
+		if (channelmap_arg == NULL) {
+			/* List mode */
+			printf("Available channelmap presets:\n\n");
+			printf("  %-8s  %s\n", "PRESET", "SOURCE CHANNEL ORDER");
+			printf("  %-8s  %s\n", "------",
+			    "--------------------");
+			for (p = channelmap_presets; p->name != NULL; p++)
+				printf("  %-8s  %s\n", p->name, p->desc);
+			printf("\nUsage: send2tv --channelmap <preset> file\n");
+			return 0;
+		}
+
+		for (p = channelmap_presets; p->name != NULL; p++) {
+			if (strcmp(p->name, channelmap_arg) == 0)
+				break;
+		}
+		if (p->name == NULL) {
+			fprintf(stderr,
+			    "Unknown channelmap preset '%s'. "
+			    "Run --channelmap without a name to list.\n",
+			    channelmap_arg);
+			return 1;
+		}
+		memcpy(media.channelmap, p->map, sizeof(media.channelmap));
+		media.has_channelmap = 1;
+		transcode = 1; /* channelmap requires transcoding */
+		printf("Channel map: %s\n", p->desc);
 	}
 
 	/* Discovery mode: interactive select, optionally overwrite config */
