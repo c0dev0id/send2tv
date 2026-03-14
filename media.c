@@ -1242,6 +1242,10 @@ encode_audio_frame(media_ctx_t *ctx, AVFrame *frame, int out_stream_idx)
 	while (avcodec_receive_packet(ctx->audio_enc, pkt) == 0) {
 		av_packet_rescale_ts(pkt, ctx->audio_enc->time_base,
 		    ctx->ofmt_ctx->streams[out_stream_idx]->time_base);
+		if (pkt->pts != AV_NOPTS_VALUE && pkt->pts < 0)
+			pkt->pts = 0;
+		if (pkt->dts != AV_NOPTS_VALUE && pkt->dts < 0)
+			pkt->dts = 0;
 		pkt->stream_index = out_stream_idx;
 		av_write_frame(ctx->ofmt_ctx, pkt);
 		av_packet_unref(pkt);
