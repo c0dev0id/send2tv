@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
 #include <signal.h>
 #include <termios.h>
 #include <poll.h>
@@ -213,6 +214,136 @@ load_config(const char **host, const char **audiodev, int *port,
 }
 
 /*
+ * Append mac=<addr> to ~/.send2tv.conf so future cold-start invocations
+ * can send a Wake-on-LAN packet without manual configuration.
+ */
+static void
+save_mac_to_config(const char *mac)
+{
+	const char	*home;
+	char		 path[1024];
+	FILE		*fp;
+
+	home = getenv("HOME");
+	if (home == NULL)
+		return;
+
+	snprintf(path, sizeof(path), "%s/.send2tv.conf", home);
+	fp = fopen(path, "a");
+	if (fp == NULL) {
+		fprintf(stderr, "Cannot save MAC to %s: %s\n",
+		    path, strerror(errno));
+		return;
+	}
+	fprintf(fp, "mac=%s\n", mac);
+	fclose(fp);
+	printf("Saved MAC address %s to %s\n", mac, path);
+}
+
+/*
+ * Write or replace the host= entry in ~/.send2tv.conf.
+ * If the file doesn't exist it is created with just host=<new_host>.
+ */
+static void
+update_config_host(const char *new_host)
+{
+	const char	*home;
+	char		 path[1024], tmp[1040];
+	FILE		*in, *out;
+	char		 line[512];
+	int		 found = 0;
+
+	home = getenv("HOME");
+	if (home == NULL)
+		return;
+
+	snprintf(path, sizeof(path), "%s/.send2tv.conf", home);
+	snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+
+	in = fopen(path, "r");
+	out = fopen(tmp, "w");
+	if (out == NULL) {
+		fprintf(stderr, "Cannot write config %s: %s\n",
+		    tmp, strerror(errno));
+		if (in != NULL)
+			fclose(in);
+		return;
+	}
+
+	if (in != NULL) {
+		while (fgets(line, sizeof(line), in) != NULL) {
+			if (strncmp(line, "host=", 5) == 0) {
+				if (!found) {
+					fprintf(out, "host=%s\n", new_host);
+					found = 1;
+				}
+				/* drop extra host= lines */
+			} else {
+				fputs(line, out);
+			}
+		}
+		fclose(in);
+	}
+
+	if (!found)
+		fprintf(out, "host=%s\n", new_host);
+
+	fclose(out);
+
+	if (rename(tmp, path) < 0) {
+		fprintf(stderr, "Cannot save config: %s\n", strerror(errno));
+		return;
+	}
+	printf("Saved %s as default host in %s\n", new_host, path);
+}
+
+/*
+ * Run SSDP discovery, present a numbered list, prompt the user to
+ * pick a device, and optionally save it as the default in the config.
+ * Copies the chosen IP into out_host (size out_sz).
+ * Returns 0 on success, -1 if nothing was chosen.
+ */
+static int
+discover_and_select(char *out_host, size_t out_sz)
+{
+	upnp_device_t	 devices[UPNP_MAX_DEVICES];
+	char		 line[64];
+	int		 count, sel, i;
+
+	count = upnp_discover(devices, UPNP_MAX_DEVICES);
+	if (count <= 0) {
+		fprintf(stderr, "No devices found.\n");
+		return -1;
+	}
+
+	printf("\nFound %d device(s):\n", count);
+	for (i = 0; i < count; i++)
+		printf("  %d) %-16s %s\n", i + 1,
+		    devices[i].ip, devices[i].name);
+
+	printf("\nSelect device (1-%d): ", count);
+	fflush(stdout);
+	if (fgets(line, sizeof(line), stdin) == NULL)
+		return -1;
+
+	sel = atoi(line);
+	if (sel < 1 || sel > count) {
+		fprintf(stderr, "Invalid selection.\n");
+		return -1;
+	}
+
+	strlcpy(out_host, devices[sel - 1].ip, out_sz);
+
+	printf("Save %s as default? [y/N] ", out_host);
+	fflush(stdout);
+	if (fgets(line, sizeof(line), stdin) != NULL &&
+	    (line[0] == 'y' || line[0] == 'Y'))
+		update_config_host(out_host);
+
+	return 0;
+}
+
+/*
  * Connect to the TV's AVTransport service.
  * If the initial attempt fails and a MAC address is configured,
  * send a Wake-on-LAN packet and retry for up to 60 seconds.
@@ -223,8 +354,12 @@ connect_to_tv(upnp_ctx_t *upnp)
 {
 	int	 t;
 
-	if (upnp_find_transport(upnp) == 0)
+	if (upnp_find_transport(upnp) == 0) {
+		if (upnp->tv_mac[0] == '\0' &&
+		    upnp_get_mac(upnp) == 0)
+			save_mac_to_config(upnp->tv_mac);
 		return 0;
+	}
 
 	if (upnp->tv_mac[0] == '\0')
 		return -1;
@@ -319,10 +454,11 @@ main(int argc, char *argv[])
 	argc -= optind;
 	argv += optind;
 
-	/* Discovery mode */
+	/* Discovery mode: interactive select, optionally overwrite config */
 	if (discover) {
-		upnp_discover();
-		return 0;
+		if (discover_and_select(conf_host, sizeof(conf_host)) == 0)
+			host = conf_host;
+		return (host != NULL) ? 0 : 1;
 	}
 
 	/* Query mode: show TV capabilities and exit */
@@ -339,8 +475,12 @@ main(int argc, char *argv[])
 	}
 
 	/* Validate arguments */
-	if (host == NULL)
-		usage();
+	if (host == NULL) {
+		/* No host configured: run interactive discovery */
+		if (discover_and_select(conf_host, sizeof(conf_host)) < 0)
+			return 1;
+		host = conf_host;
+	}
 	if (argc == 0 && !screen)
 		usage();
 	if (argc > 0 && screen)

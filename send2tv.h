@@ -109,12 +109,20 @@ typedef struct {
 	pthread_t	 thread;
 } httpd_ctx_t;
 
+/* Discovered UPnP device */
+#define UPNP_MAX_DEVICES	16
+typedef struct {
+	char	 ip[64];
+	char	 name[192];	/* friendlyName (modelName) */
+} upnp_device_t;
+
 /* dlna.c */
 void	 build_dlna_features(char *buf, size_t buflen,
 	    const char *dlna_profile, int is_streaming);
 
 /* upnp.c */
-int	 upnp_discover(void);
+int	 upnp_discover(upnp_device_t *devices, int max_devices);
+int	 upnp_get_mac(upnp_ctx_t *ctx);
 int	 upnp_wake(upnp_ctx_t *ctx);
 int	 upnp_find_transport(upnp_ctx_t *ctx);
 int	 upnp_set_uri(upnp_ctx_t *ctx, const char *uri, const char *mime,

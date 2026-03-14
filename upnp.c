@@ -239,11 +239,12 @@ xml_extract(const char *xml, const char *open_tag, const char *close_tag,
 }
 
 /*
- * SSDP discovery: find MediaRenderer devices on the network.
- * Prints discovered devices to stdout. Returns number found.
+ * SSDP discovery: find UPnP devices on the network.
+ * Populates the devices array (up to max_devices entries).
+ * Returns number of unique devices found.
  */
 int
-upnp_discover(void)
+upnp_discover(upnp_device_t *devices, int max_devices)
 {
 	int			 sock, n, found = 0;
 	struct sockaddr_in	 mcast_addr, from_addr;
@@ -407,14 +408,23 @@ upnp_discover(void)
 			continue;
 
 		DPRINTF("ssdp: %s model=%s\n", friendly, model);
-		printf("  %-16s %s", ip_str, friendly[0] ? friendly : model);
-		if (model[0] != '\0' && friendly[0] != '\0')
-			printf(" (%s)", model);
-		printf("\n");
 
 		if (seen_count < MAX_SEEN)
 			strlcpy(seen_ips[seen_count++], ip_str,
 			    INET_ADDRSTRLEN);
+
+		if (devices != NULL && found < max_devices) {
+			strlcpy(devices[found].ip, ip_str,
+			    sizeof(devices[found].ip));
+			if (friendly[0] && model[0])
+				snprintf(devices[found].name,
+				    sizeof(devices[found].name),
+				    "%s (%s)", friendly, model);
+			else
+				strlcpy(devices[found].name,
+				    friendly[0] ? friendly : model,
+				    sizeof(devices[found].name));
+		}
 		found++;
 	}
 #undef MAX_SEEN
@@ -425,6 +435,46 @@ upnp_discover(void)
 		printf("No devices found.\n");
 
 	return found;
+}
+
+/*
+ * Look up the TV's MAC address from the ARP cache.
+ * Populates ctx->tv_mac on success.
+ * Returns 0 on success, -1 on failure.
+ */
+int
+upnp_get_mac(upnp_ctx_t *ctx)
+{
+	char	 cmd[128];
+	char	 line[256];
+	char	 mac[18];
+	FILE	*fp;
+	int	 found = 0;
+
+	snprintf(cmd, sizeof(cmd), "arp -n %s", ctx->tv_ip);
+	fp = popen(cmd, "r");
+	if (fp == NULL)
+		return -1;
+
+	/* Skip header line */
+	if (fgets(line, sizeof(line), fp) == NULL) {
+		pclose(fp);
+		return -1;
+	}
+
+	/* Read data line: "HOST  MAC  NETIF  ..." */
+	if (fgets(line, sizeof(line), fp) != NULL) {
+		if (sscanf(line, "%*s %17s", mac) == 1 &&
+		    strchr(mac, ':') != NULL) {
+			strlcpy(ctx->tv_mac, mac, sizeof(ctx->tv_mac));
+			found = 1;
+		}
+	}
+
+	pclose(fp);
+	DPRINTF("arp: %s -> %s\n", ctx->tv_ip,
+	    found ? ctx->tv_mac : "(not found)");
+	return found ? 0 : -1;
 }
 
 /*
