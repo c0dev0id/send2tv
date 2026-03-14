@@ -271,6 +271,56 @@ set_dlna_profile(media_ctx_t *ctx, const char *fmt_name,
 }
 
 /*
+ * List all audio streams in a file with their index, language, codec,
+ * channel layout, and sample rate.
+ */
+void
+media_list_audio_streams(const char *filepath)
+{
+	AVFormatContext		*fmt = NULL;
+	int			 i, found = 0;
+
+	if (avformat_open_input(&fmt, filepath, NULL, NULL) < 0) {
+		fprintf(stderr, "Cannot open %s\n", filepath);
+		return;
+	}
+	if (avformat_find_stream_info(fmt, NULL) < 0) {
+		avformat_close_input(&fmt);
+		return;
+	}
+
+	printf("Audio streams in %s:\n", filepath);
+	printf("  %-4s  %-6s  %-8s  %-24s  %s\n",
+	    "IDX", "LANG", "CODEC", "LAYOUT", "RATE");
+
+	for (i = 0; i < (int)fmt->nb_streams; i++) {
+		AVStream		*st = fmt->streams[i];
+		AVDictionaryEntry	*lang;
+		char			 layout[64] = "unknown";
+
+		if (st->codecpar->codec_type != AVMEDIA_TYPE_AUDIO)
+			continue;
+
+		lang = av_dict_get(st->metadata, "language", NULL, 0);
+		av_channel_layout_describe(&st->codecpar->ch_layout,
+		    layout, sizeof(layout));
+
+		printf("  %-4d  %-6s  %-8s  %-24s  %d Hz\n",
+		    i,
+		    lang ? lang->value : "und",
+		    avcodec_get_name(st->codecpar->codec_id),
+		    layout,
+		    st->codecpar->sample_rate);
+		found++;
+	}
+
+	if (!found)
+		printf("  (no audio streams)\n");
+
+	avformat_close_input(&fmt);
+}
+
+/*
  * Probe a media file to determine codecs and whether transcoding is needed.
  */
 int
@@ -302,6 +352,52 @@ media_probe(media_ctx_t *ctx, const char *filepath, int force_transcode)
 	    -1, -1, NULL, 0);
 	ctx->audio_idx = av_find_best_stream(fmt, AVMEDIA_TYPE_AUDIO,
 	    -1, -1, NULL, 0);
+
+	/* Override audio stream if user specified a selector */
+	if (ctx->audio_selector != NULL) {
+		char	*end;
+		long	 idx = strtol(ctx->audio_selector, &end, 10);
+
+		if (*end == '\0') {
+			/* Numeric: treat as stream index */
+			if (idx >= 0 && idx < (long)fmt->nb_streams &&
+			    fmt->streams[idx]->codecpar->codec_type ==
+			    AVMEDIA_TYPE_AUDIO) {
+				ctx->audio_idx = (int)idx;
+			} else {
+				fprintf(stderr,
+				    "Stream %ld is not an audio stream, "
+				    "using default\n", idx);
+			}
+		} else {
+			/* Language tag: case-insensitive match */
+			int j, found = 0;
+
+			for (j = 0; j < (int)fmt->nb_streams; j++) {
+				AVStream		*st = fmt->streams[j];
+				AVDictionaryEntry	*lang;
+
+				if (st->codecpar->codec_type !=
+				    AVMEDIA_TYPE_AUDIO)
+					continue;
+				lang = av_dict_get(st->metadata,
+				    "language", NULL, 0);
+				if (lang != NULL &&
+				    strcasecmp(lang->value,
+				    ctx->audio_selector) == 0) {
+					ctx->audio_idx = j;
+					found = 1;
+					break;
+				}
+			}
+			if (!found) {
+				fprintf(stderr,
+				    "No audio stream with language "
+				    "'%s', using default\n",
+				    ctx->audio_selector);
+			}
+		}
+	}
 
 	if (ctx->video_idx >= 0) {
 		vid_codec = fmt->streams[ctx->video_idx]->codecpar->codec_id;

@@ -99,6 +99,8 @@ usage(void)
 	    "  --app <n>      launch app whose name contains <n> (case-insensitive)\n"
 	    "  --channelmap   list 5.1 channel remapping presets\n"
 	    "  --channelmap <preset>  remap audio channels (forces transcode)\n"
+	    "  --lang         list audio streams in file\n"
+	    "  --lang <id>    select audio stream by index or language tag\n"
 	    "  -v        verbose/debug output\n"
 	    "\n"
 	    "During playback:\n"
@@ -416,6 +418,7 @@ main(int argc, char *argv[])
 	static const struct option longopts[] = {
 		{ "app",        optional_argument, NULL, 'A' },
 		{ "channelmap", optional_argument, NULL, 'M' },
+		{ "lang",       optional_argument, NULL, 'L' },
 		{ NULL,         0,                 NULL,  0  }
 	};
 	const char	*host = NULL;
@@ -424,7 +427,9 @@ main(int argc, char *argv[])
 	const char	*mac = NULL;
 	const char	*app_name = NULL;
 	const char	*channelmap_arg = NULL;
+	const char	*lang_arg = NULL;
 	int		 channelmap_mode = 0;
+	int		 lang_mode = 0;
 	int		 screen = 0;
 	int		 transcode = 0;
 	int		 discover = 0;
@@ -504,6 +509,14 @@ main(int argc, char *argv[])
 				channelmap_arg = optarg;
 			else if (optind < argc && argv[optind][0] != '-')
 				channelmap_arg = argv[optind++];
+			/* else NULL → list mode */
+			break;
+		case 'L':
+			lang_mode = 1;
+			if (optarg != NULL)
+				lang_arg = optarg;
+			else if (optind < argc && argv[optind][0] != '-')
+				lang_arg = argv[optind++];
 			/* else NULL → list mode */
 			break;
 		default:
@@ -614,6 +627,20 @@ main(int argc, char *argv[])
 		media.has_channelmap = 1;
 		transcode = 1; /* channelmap requires transcoding */
 		printf("Channel map: %s\n", p->desc);
+	}
+
+	/* Lang list mode: show audio streams and exit */
+	if (lang_mode && lang_arg == NULL) {
+		int i;
+
+		if (argc == 0) {
+			fprintf(stderr,
+			    "--lang (list mode) requires a file argument\n");
+			return 1;
+		}
+		for (i = 0; i < argc; i++)
+			media_list_audio_streams(argv[i]);
+		return 0;
 	}
 
 	/* Discovery mode: interactive select, optionally overwrite config */
@@ -871,6 +898,21 @@ main(int argc, char *argv[])
 		media.pipe_wr = -1;
 		media.bitrate = bitrate;
 		media.vcodec = vcodec;
+		if (lang_mode && lang_arg != NULL)
+			media.audio_selector = lang_arg;
+		/* channelmap is cleared by memset; restore for each file */
+		if (channelmap_mode && channelmap_arg != NULL) {
+			const channelmap_preset_t *p;
+
+			for (p = channelmap_presets; p->name != NULL; p++) {
+				if (strcmp(p->name, channelmap_arg) == 0) {
+					memcpy(media.channelmap, p->map,
+					    sizeof(media.channelmap));
+					media.has_channelmap = 1;
+					break;
+				}
+			}
+		}
 
 		printf("\n[%d/%d] %s\n", fileidx + 1, argc, file);
 

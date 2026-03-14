@@ -92,6 +92,9 @@ typedef struct {
 	/* audio channel remapping (map[out] = in_index, -1 = silence) */
 	int		 channelmap[6];
 	int		 has_channelmap;
+
+	/* audio stream selector: stream index (numeric) or language tag */
+	const char	*audio_selector;
 } media_ctx_t;
 
 /* UPnP context */
@@ -154,6 +157,7 @@ int	 httpd_start(httpd_ctx_t *ctx, media_ctx_t *media, int port);
 void	 httpd_stop(httpd_ctx_t *ctx);
 
 /* media.c */
+void	 media_list_audio_streams(const char *filepath);
 int	 media_probe(media_ctx_t *ctx, const char *filepath, int force_transcode);
 int	 media_open_transcode(media_ctx_t *ctx);
 int	 media_restart_transcode(media_ctx_t *ctx, int start_sec);
