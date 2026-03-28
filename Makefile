@@ -24,7 +24,10 @@ tests: tests.c media.c upnp.c dlna.c send2tv.h
 test: tests
 	./tests
 
+install: send2tv
+	install -m 755 send2tv ${HOME}/.bin/send2tv
+
 clean:
 	rm -f send2tv tests ${OBJ}
 
-.PHONY: clean test
+.PHONY: clean install test
