@@ -119,8 +119,6 @@ typedef struct {
 	media_ctx_t	*media;
 	volatile int	 running;
 	pthread_t	 thread;
-	const uint8_t	*image_data;
-	size_t		 image_size;
 } httpd_ctx_t;
 
 /* Samsung app entry */

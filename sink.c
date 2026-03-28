@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
@@ -45,76 +44,6 @@ avio_read_sock(void *opaque, uint8_t *buf, int buf_size)
 		return AVERROR(errno);
 	}
 	return AVERROR(EINTR);
-}
-
-/* ---------------------------------------------------------------------- */
-/* Generate a 64x36 black JPEG using libavcodec.                           */
-/* ---------------------------------------------------------------------- */
-
-static int
-make_black_jpeg(uint8_t **out, size_t *outsz)
-{
-	const AVCodec	*codec;
-	AVCodecContext	*cctx  = NULL;
-	AVFrame		*frame = NULL;
-	AVPacket	*pkt   = NULL;
-	int		 ret   = -1;
-
-	codec = avcodec_find_encoder(AV_CODEC_ID_MJPEG);
-	if (codec == NULL) {
-		fprintf(stderr, "sink: MJPEG encoder not available\n");
-		return -1;
-	}
-
-	cctx = avcodec_alloc_context3(codec);
-	if (cctx == NULL)
-		return -1;
-
-	cctx->width     = 64;
-	cctx->height    = 36;
-	cctx->time_base = (AVRational){1, 25};
-	cctx->pix_fmt   = AV_PIX_FMT_YUVJ420P;  /* full-range JPEG */
-
-	if (avcodec_open2(cctx, codec, NULL) < 0)
-		goto done;
-
-	frame = av_frame_alloc();
-	if (frame == NULL)
-		goto done;
-
-	frame->width  = 64;
-	frame->height = 36;
-	frame->format = AV_PIX_FMT_YUVJ420P;
-	frame->pts    = 0;
-
-	if (av_frame_get_buffer(frame, 0) < 0 ||
-	    av_frame_make_writable(frame) < 0)
-		goto done;
-
-	/* Black: Y=0, U=128, V=128 (full-range) */
-	memset(frame->data[0], 0,   frame->linesize[0] * cctx->height);
-	memset(frame->data[1], 128, frame->linesize[1] * (cctx->height / 2));
-	memset(frame->data[2], 128, frame->linesize[2] * (cctx->height / 2));
-
-	pkt = av_packet_alloc();
-	if (pkt == NULL)
-		goto done;
-
-	if (avcodec_send_frame(cctx, frame) >= 0 &&
-	    avcodec_receive_packet(cctx, pkt) >= 0) {
-		*out = av_malloc(pkt->size);
-		if (*out != NULL) {
-			memcpy(*out, pkt->data, pkt->size);
-			*outsz = pkt->size;
-			ret    = 0;
-		}
-	}
-
-done:
-	av_packet_free(&pkt);
-	av_frame_free(&frame);
-	avcodec_free_context(&cctx);
-	return ret;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -180,13 +109,10 @@ sink_run(upnp_ctx_t *upnp, const char *sock_path, int port,
 {
 	httpd_ctx_t	 httpd;
 	media_ctx_t	 media;
-	uint8_t		*img_data = NULL;
-	size_t		 img_size = 0;
 	int		 srv_fd   = -1;
 	int		 seg_id   = 0;
 	int		 ret      = -1;
 	struct sockaddr_un addr;
-	char		 image_url[256];
 	char		 media_url[256];
 
 	memset(&httpd, 0, sizeof(httpd));
@@ -195,32 +121,14 @@ sink_run(upnp_ctx_t *upnp, const char *sock_path, int port,
 	media.pipe_wr = -1;
 	media.mode    = MODE_SINK;
 
-	/* Generate idle image */
-	if (make_black_jpeg(&img_data, &img_size) < 0) {
-		fprintf(stderr, "sink: cannot generate idle image\n");
-		return -1;
-	}
-
-	httpd.image_data = img_data;
-	httpd.image_size = img_size;
-
 	/* Start HTTP server */
 	if (httpd_start(&httpd, &media, port) < 0) {
 		fprintf(stderr, "sink: cannot start HTTP server\n");
 		goto done;
 	}
 
-	snprintf(image_url, sizeof(image_url),
-	    "http://%s:%d/image", upnp->local_ip, httpd.port);
-
-	/* Show idle image on TV */
-	printf("Sink: idle image at %s\n", image_url);
-	if (upnp_set_uri(upnp, image_url, "image/jpeg",
-	    "Waiting", 0, "JPEG_LRG") < 0 ||
-	    upnp_play(upnp) < 0) {
-		fprintf(stderr, "sink: cannot show idle image on TV\n");
-		goto done;
-	}
+	/* Ensure TV is in a clean stopped state while we wait for input */
+	upnp_stop(upnp);
 
 	/* Create Unix domain socket */
 	srv_fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -371,6 +279,5 @@ done:
 		unlink(sock_path);
 	}
 	httpd_stop(&httpd);
-	av_free(img_data);
 	return ret;
 }

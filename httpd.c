@@ -194,36 +194,6 @@ handle_request(int client_fd, httpd_ctx_t *ctx)
 	if (p != NULL)
 		p++;
 
-	/* Serve idle image */
-	if (p != NULL && strncmp(p, "/image", 6) == 0) {
-		if (ctx->image_data != NULL && ctx->image_size > 0) {
-			char dlna[256];
-			char hdrs[512];
-			int  hlen;
-
-			build_dlna_features(dlna, sizeof(dlna),
-			    "JPEG_LRG", 0);
-			hlen = snprintf(hdrs, sizeof(hdrs),
-			    "HTTP/1.1 200 OK\r\n"
-			    "Content-Type: image/jpeg\r\n"
-			    "Content-Length: %zu\r\n"
-			    "transferMode.dlna.org: Interactive\r\n"
-			    "contentFeatures.dlna.org: %s\r\n"
-			    "Connection: close\r\n\r\n",
-			    ctx->image_size, dlna);
-			send_all(client_fd, hdrs, hlen);
-			if (!head_only)
-				send_all(client_fd, ctx->image_data,
-				    ctx->image_size);
-		} else {
-			send_headers(client_fd, 404, "Not Found",
-			    "text/plain", 9, -1, -1, -1, 0, NULL);
-			if (!head_only)
-				send_all(client_fd, "Not Found", 9);
-		}
-		return;
-	}
-
 	/* Check path is /media */
 	if (p == NULL || strncmp(p, "/media", 6) != 0) {
 		send_headers(client_fd, 404, "Not Found",
