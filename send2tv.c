@@ -1295,9 +1295,17 @@ main(int argc, char *argv[])
 					continue;
 
 				if (!media.needs_transcode) {
-					/* Direct file: TV handles seek */
-					upnp_seek_relative(&upnp,
-					    delta);
+					/* Direct file: clamp to [0, duration-5] */
+					int pos = 0, target;
+
+					upnp_get_position(&upnp, &pos);
+					target = pos + delta;
+					if (target < 0)
+						target = 0;
+					if (media.duration_sec > 0 &&
+					    target > media.duration_sec - 5)
+						target = media.duration_sec - 5;
+					upnp_seek(&upnp, target);
 				} else {
 					/* Transcoded: restart from
 					 * new position */
@@ -1311,6 +1319,9 @@ main(int argc, char *argv[])
 					    pos + delta;
 					if (target < 0)
 						target = 0;
+					if (media.duration_sec > 0 &&
+					    target > media.duration_sec - 5)
+						target = media.duration_sec - 5;
 
 					DPRINTF("seek: restart "
 					    "transcode at %ds\n",
