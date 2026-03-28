@@ -7,6 +7,7 @@
 #include <signal.h>
 #include <termios.h>
 #include <poll.h>
+#include <time.h>
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <sys/socket.h>
@@ -1196,12 +1197,127 @@ main(int argc, char *argv[])
 			int		 delta;
 			int		 end_mode = 0;
 			int		 saved_pos = 0;
+			int		 seek_delta = 0;
+			int		 seek_pending = 0;
+			struct timespec	 seek_ts;
 
 			pfd.fd = STDIN_FILENO;
 			pfd.events = POLLIN;
 
 			while (running && media.running) {
-				if (poll(&pfd, 1, 500) <= 0)
+				int timeout = 500;
+
+				/* Fire debounced seek if 500ms have elapsed */
+				if (seek_pending) {
+					struct timespec	 now;
+					long		 elapsed_ms;
+					int		 pos = 0, target;
+
+					clock_gettime(CLOCK_MONOTONIC, &now);
+					elapsed_ms =
+					    (now.tv_sec  - seek_ts.tv_sec)
+					    * 1000 +
+					    (now.tv_nsec - seek_ts.tv_nsec)
+					    / 1000000;
+					if (elapsed_ms >= 500) {
+						seek_pending = 0;
+						if (upnp.control_url[0] != '\0')
+							upnp_get_position(&upnp,
+							    &pos);
+						target = media.start_sec + pos
+						    + seek_delta;
+						seek_delta = 0;
+						if (target < 0)
+							target = 0;
+						if (media.duration_sec > 0 &&
+						    target >
+						    media.duration_sec - 5)
+							target =
+							    media.duration_sec
+							    - 5;
+
+						DPRINTF("seek: restart at "
+						    "%ds\n", target);
+						media.running = 0;
+						pthread_join(media.thread,
+						    NULL);
+
+						data_fd = unix_connect(
+						    data_path);
+						if (data_fd < 0) {
+							fprintf(stderr,
+							    "Seek: data connect"
+							    " failed\n");
+							running = 0;
+							break;
+						}
+						media_close_transcode_state(
+						    &media);
+						media.pipe_wr = data_fd;
+						media.ctrl_fd = ctrl_fd;
+						media.running = 1;
+						media.start_sec = target;
+						av_seek_frame(media.ifmt_ctx,
+						    -1,
+						    (int64_t)target *
+						    AV_TIME_BASE,
+						    AVSEEK_FLAG_BACKWARD);
+						if (media.video_dec)
+							avcodec_flush_buffers(
+							    media.video_dec);
+						if (media.audio_dec)
+							avcodec_flush_buffers(
+							    media.audio_dec);
+						if (media.needs_transcode) {
+							if (media_open_transcode(
+							    &media) < 0 ||
+							    pthread_create(
+							    &media.thread, NULL,
+							    media_transcode_thread,
+							    &media) != 0) {
+								fprintf(stderr,
+								    "Seek "
+								    "failed\n");
+								close(data_fd);
+								data_fd = -1;
+								running = 0;
+								break;
+							}
+						} else {
+							if (media_open_remux(
+							    &media) < 0 ||
+							    pthread_create(
+							    &media.thread, NULL,
+							    media_remux_thread,
+							    &media) != 0) {
+								fprintf(stderr,
+								    "Seek "
+								    "failed\n");
+								close(data_fd);
+								data_fd = -1;
+								running = 0;
+								break;
+							}
+						}
+						data_fd = -1;
+						{
+							char play_cmd[256];
+							snprintf(play_cmd,
+							    sizeof(play_cmd),
+							    "PLAY %s %s\n",
+							    media.mime_type,
+							    media.dlna_profile);
+							ctrl_send(ctrl_fd,
+							    play_cmd);
+						}
+						continue;
+					} else {
+						timeout = (int)(500 -
+						    elapsed_ms);
+					}
+				}
+
+				if (poll(&pfd, 1, timeout) <= 0)
 					continue;
 
 				n = read(STDIN_FILENO, buf,
@@ -1326,85 +1442,9 @@ main(int argc, char *argv[])
 				if (delta == 0)
 					continue;
 
-				{
-					int pos = 0, target;
-
-					if (upnp.control_url[0] != '\0')
-						upnp_get_position(&upnp, &pos);
-					target = media.start_sec + pos + delta;
-					if (target < 0)
-						target = 0;
-					if (media.duration_sec > 0 &&
-					    target > media.duration_sec - 5)
-						target = media.duration_sec - 5;
-
-					DPRINTF("seek: restart at %ds\n",
-					    target);
-					media.running = 0;
-					pthread_join(media.thread, NULL);
-
-					data_fd = unix_connect(data_path);
-					if (data_fd < 0) {
-						fprintf(stderr,
-						    "Seek: data connect "
-						    "failed\n");
-						running = 0;
-						break;
-					}
-					media_close_transcode_state(&media);
-					media.pipe_wr = data_fd;
-					media.ctrl_fd = ctrl_fd;
-					media.running = 1;
-					media.start_sec = target;
-					av_seek_frame(media.ifmt_ctx, -1,
-					    (int64_t)target * AV_TIME_BASE,
-					    AVSEEK_FLAG_BACKWARD);
-					if (media.video_dec)
-						avcodec_flush_buffers(
-						    media.video_dec);
-					if (media.audio_dec)
-						avcodec_flush_buffers(
-						    media.audio_dec);
-					if (media.needs_transcode) {
-						if (media_open_transcode(
-						    &media) < 0 ||
-						    pthread_create(
-						    &media.thread, NULL,
-						    media_transcode_thread,
-						    &media) != 0) {
-							fprintf(stderr,
-							    "Seek failed\n");
-							close(data_fd);
-							data_fd = -1;
-							running = 0;
-							break;
-						}
-					} else {
-						if (media_open_remux(
-						    &media) < 0 ||
-						    pthread_create(
-						    &media.thread, NULL,
-						    media_remux_thread,
-						    &media) != 0) {
-							fprintf(stderr,
-							    "Seek failed\n");
-							close(data_fd);
-							data_fd = -1;
-							running = 0;
-							break;
-						}
-					}
-					data_fd = -1;
-					{
-						char play_cmd[256];
-						snprintf(play_cmd,
-						    sizeof(play_cmd),
-						    "PLAY %s %s\n",
-						    media.mime_type,
-						    media.dlna_profile);
-						ctrl_send(ctrl_fd, play_cmd);
-					}
-				}
+				seek_delta += delta;
+				seek_pending = 1;
+				clock_gettime(CLOCK_MONOTONIC, &seek_ts);
 			}
 		}
 
