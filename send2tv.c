@@ -15,6 +15,7 @@
 
 int verbose = 0;
 static volatile int running = 1;
+static volatile pid_t ytdlp_pid = 0;
 static struct termios orig_termios;
 static int term_raw = 0;
 static char conf_host[256];
@@ -117,9 +118,14 @@ sighandler(int sig)
 {
 	(void)sig;
 	term_restore();
-	if (!running)
+	if (!running) {
+		if (ytdlp_pid > 0)
+			kill(ytdlp_pid, SIGKILL);
 		_exit(1);
+	}
 	running = 0;
+	if (ytdlp_pid > 0)
+		kill(ytdlp_pid, SIGTERM);
 }
 
 static void
@@ -458,16 +464,34 @@ ytdlp_resolve(const char *url, char *out_url, size_t url_sz,
 		_exit(1);
 	}
 	close(pipefd[1]);
+	ytdlp_pid = pid;
 
 	while (total < sizeof(buf) - 1) {
 		n = read(pipefd[0], buf + total, sizeof(buf) - 1 - total);
-		if (n <= 0)
+		if (n < 0) {
+			if (errno == EINTR) {
+				if (!running)
+					break;
+				continue;
+			}
+			break;
+		}
+		if (n == 0)
 			break;
 		total += n;
 	}
 	buf[total] = '\0';
 	close(pipefd[0]);
+
+	if (!running) {
+		kill(pid, SIGTERM);
+		waitpid(pid, NULL, 0);
+		ytdlp_pid = 0;
+		return -1;
+	}
+
 	waitpid(pid, &status, 0);
+	ytdlp_pid = 0;
 
 	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
 		return -1;
@@ -986,8 +1010,10 @@ main(int argc, char *argv[])
 			    fileidx + 1, argc, file);
 			if (ytdlp_resolve(file, ytdlp_url, sizeof(ytdlp_url),
 			    ytdlp_title, sizeof(ytdlp_title)) < 0) {
-				fprintf(stderr, "yt-dlp failed to resolve "
-				    "%s, skipping\n", file);
+				if (running)
+					fprintf(stderr,
+					    "yt-dlp failed to resolve "
+					    "%s, skipping\n", file);
 				continue;
 			}
 			DPRINTF("yt-dlp title='%s' url='%s'\n",
