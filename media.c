@@ -451,6 +451,10 @@ media_probe(media_ctx_t *ctx, const char *filepath, int force_transcode)
 	DPRINTF("media: needs_transcode=%d, mime=%s\n",
 	    ctx->needs_transcode, ctx->mime_type);
 
+	/* Save duration before potentially closing fmt */
+	if (fmt->duration != AV_NOPTS_VALUE && fmt->duration > 0)
+		ctx->duration_sec = (int)(fmt->duration / AV_TIME_BASE);
+
 	/* Keep format context open if we need to transcode */
 	if (ctx->needs_transcode) {
 		ctx->ifmt_ctx = fmt;

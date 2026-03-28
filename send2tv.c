@@ -108,6 +108,7 @@ usage(void)
 	    "\n"
 	    "During playback:\n"
 	    "  arrows    seek (left/right: 10s, up/down: 30s)\n"
+	    "  e         jump to last minute / jump back\n"
 	    "  q         next file\n"
 	    "  Q         quit\n");
 	exit(1);
@@ -1116,7 +1117,7 @@ main(int argc, char *argv[])
 		/* Enter raw terminal mode for key input */
 		if (term_raw_mode() == 0)
 			printf("Playing. Keys: arrows=seek, "
-			    "q=next, Q=quit\n");
+			    "e=end/back, q=next, Q=quit\n");
 		else
 			printf("Playing. Press Ctrl+C to stop.\n");
 
@@ -1126,6 +1127,8 @@ main(int argc, char *argv[])
 			unsigned char	 buf[8];
 			ssize_t		 n;
 			int		 delta;
+			int		 end_mode = 0;
+			int		 saved_pos = 0;
 
 			pfd.fd = STDIN_FILENO;
 			pfd.events = POLLIN;
@@ -1149,6 +1152,67 @@ main(int argc, char *argv[])
 				    buf[0] == 0x03) {
 					running = 0;
 					break;
+				}
+
+				/* e: jump to last minute / jump back */
+				if (buf[0] == 'e' &&
+				    media.duration_sec > 0) {
+					int epos = 0, etarget;
+
+					if (!end_mode) {
+						upnp_get_position(&upnp,
+						    &epos);
+						etarget = media.duration_sec
+						    - 60;
+						if (etarget < 0)
+							etarget = 0;
+						saved_pos = media.needs_transcode
+						    ? media.start_sec + epos
+						    : epos;
+						end_mode = 1;
+					} else {
+						etarget = saved_pos;
+						end_mode = 0;
+					}
+
+					if (!media.needs_transcode) {
+						upnp_seek(&upnp, etarget);
+					} else {
+						DPRINTF("seek: restart "
+						    "transcode at %ds\n",
+						    etarget);
+						upnp_stop(&upnp);
+						media.running = 0;
+						pthread_join(media.thread,
+						    NULL);
+						if (media_restart_transcode(
+						    &media, etarget) < 0) {
+							fprintf(stderr,
+							    "Seek failed\n");
+							running = 0;
+							break;
+						}
+						if (pthread_create(
+						    &media.thread, NULL,
+						    media_transcode_thread,
+						    &media) != 0) {
+							fprintf(stderr,
+							    "Failed to restart "
+							    "transcoding\n");
+							running = 0;
+							break;
+						}
+						if (upnp_set_uri(&upnp,
+						    media_url,
+						    media.mime_type,
+						    title, 1,
+						    media.dlna_profile) < 0 ||
+						    upnp_play(&upnp) < 0) {
+							running = 0;
+							break;
+						}
+					}
+					continue;
 				}
 
 				/* Arrow keys: ESC [ A/B/C/D */

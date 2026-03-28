@@ -89,6 +89,7 @@ typedef struct {
 	volatile int	 running;
 	pthread_t	 thread;
 	int		 start_sec;	/* transcode start position */
+	int		 duration_sec;	/* total duration (0 if unknown) */
 
 	/* audio channel remapping (map[out] = in_index, -1 = silence) */
 	int		 channelmap[6];
