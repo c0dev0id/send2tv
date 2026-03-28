@@ -7,6 +7,8 @@
 #include <signal.h>
 #include <termios.h>
 #include <poll.h>
+#include <fcntl.h>
+#include <sys/wait.h>
 #include <getopt.h>
 
 #include "send2tv.h"
@@ -410,6 +412,90 @@ connect_to_tv(upnp_ctx_t *upnp)
 
 	fprintf(stderr, "TV did not respond after Wake-on-LAN\n");
 	return -1;
+}
+
+/*
+ * Resolve a web URL to a direct stream URL using yt-dlp.
+ * Writes the direct URL into out_url and the video title into out_title.
+ * Returns 0 on success, -1 on failure.
+ */
+static int
+ytdlp_resolve(const char *url, char *out_url, size_t url_sz,
+    char *out_title, size_t title_sz)
+{
+	const char *args[] = {
+		"yt-dlp", "--no-playlist", "-f", "best",
+		"--print", "%(title)s\n%(url)s",
+		"--", url, NULL
+	};
+	int	 pipefd[2];
+	pid_t	 pid;
+	char	 buf[4096];
+	ssize_t	 n;
+	size_t	 total = 0;
+	int	 status;
+	char	*nl, *url_start;
+	size_t	 len;
+
+	if (pipe(pipefd) < 0)
+		return -1;
+
+	pid = fork();
+	if (pid < 0) {
+		close(pipefd[0]);
+		close(pipefd[1]);
+		return -1;
+	}
+	if (pid == 0) {
+		int null;
+		close(pipefd[0]);
+		dup2(pipefd[1], STDOUT_FILENO);
+		close(pipefd[1]);
+		null = open("/dev/null", O_WRONLY);
+		if (null >= 0)
+			dup2(null, STDERR_FILENO);
+		execvp("yt-dlp", (char *const *)args);
+		_exit(1);
+	}
+	close(pipefd[1]);
+
+	while (total < sizeof(buf) - 1) {
+		n = read(pipefd[0], buf + total, sizeof(buf) - 1 - total);
+		if (n <= 0)
+			break;
+		total += n;
+	}
+	buf[total] = '\0';
+	close(pipefd[0]);
+	waitpid(pid, &status, 0);
+
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		return -1;
+
+	/* Output is: title\nurl\n */
+	nl = strchr(buf, '\n');
+	if (nl == NULL)
+		return -1;
+	*nl = '\0';
+
+	/* Strip trailing \r from title */
+	len = strlen(buf);
+	if (len > 0 && buf[len - 1] == '\r')
+		buf[len - 1] = '\0';
+	strlcpy(out_title, buf, title_sz);
+
+	/* Strip trailing whitespace from URL */
+	url_start = nl + 1;
+	len = strlen(url_start);
+	while (len > 0 && (url_start[len - 1] == '\n' ||
+	    url_start[len - 1] == '\r' || url_start[len - 1] == ' '))
+		url_start[--len] = '\0';
+
+	if (url_start[0] == '\0')
+		return -1;
+
+	strlcpy(out_url, url_start, url_sz);
+	return 0;
 }
 
 int
@@ -888,6 +974,29 @@ main(int argc, char *argv[])
 	for (fileidx = 0; fileidx < argc && running; fileidx++) {
 		const char *file = argv[fileidx];
 		const char *title;
+		char ytdlp_url[2048];
+		char ytdlp_title[256];
+		int force_tc = transcode;
+
+		/* Resolve web URLs via yt-dlp */
+		ytdlp_title[0] = '\0';
+		if (strncmp(file, "http://", 7) == 0 ||
+		    strncmp(file, "https://", 8) == 0) {
+			printf("\n[%d/%d] Resolving via yt-dlp: %s\n",
+			    fileidx + 1, argc, file);
+			if (ytdlp_resolve(file, ytdlp_url, sizeof(ytdlp_url),
+			    ytdlp_title, sizeof(ytdlp_title)) < 0) {
+				fprintf(stderr, "yt-dlp failed to resolve "
+				    "%s, skipping\n", file);
+				continue;
+			}
+			DPRINTF("yt-dlp title='%s' url='%s'\n",
+			    ytdlp_title, ytdlp_url);
+			file = ytdlp_url;
+			force_tc = 1;
+		} else {
+			printf("\n[%d/%d] %s\n", fileidx + 1, argc, file);
+		}
 
 		/* Re-initialize media context for this file */
 		memset(&media, 0, sizeof(media));
@@ -914,10 +1023,8 @@ main(int argc, char *argv[])
 			}
 		}
 
-		printf("\n[%d/%d] %s\n", fileidx + 1, argc, file);
-
 		/* Probe */
-		if (media_probe(&media, file, transcode) < 0) {
+		if (media_probe(&media, file, force_tc) < 0) {
 			fprintf(stderr, "Failed to probe %s, skipping\n",
 			    file);
 			continue;
@@ -957,9 +1064,13 @@ main(int argc, char *argv[])
 		snprintf(media_url, sizeof(media_url),
 		    "http://%s:%d/media", upnp.local_ip, httpd.port);
 
-		/* Derive title from filename */
-		title = strrchr(file, '/');
-		title = (title != NULL) ? title + 1 : file;
+		/* Derive title from yt-dlp metadata or filename */
+		if (ytdlp_title[0] != '\0')
+			title = ytdlp_title;
+		else {
+			title = strrchr(file, '/');
+			title = (title != NULL) ? title + 1 : file;
+		}
 
 		/* Set URI and play */
 		printf("Sending media URL to TV...\n");
