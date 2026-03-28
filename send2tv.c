@@ -475,6 +475,9 @@ ytdlp_resolve(const char *url, char *out_url, size_t url_sz,
 		"-f", "best[vcodec^=avc1][ext=mp4]"
 		    "/best[vcodec^=avc1]"
 		    "/best[ext=mp4]"
+		    "/best[vcodec^=hev1]"
+		    "/best[vcodec^=hvc1]"
+		    "/best[height<=1080]"
 		    "/best",
 		"--print", "%(title)s\n%(url)s",
 		"--", url, NULL
