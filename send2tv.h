@@ -100,6 +100,9 @@ typedef struct {
 
 	/* audio stream selector: stream index (numeric) or language tag */
 	const char	*audio_selector;
+
+	/* control socket fd for sending STOP when stream ends naturally */
+	int		 ctrl_fd;
 } media_ctx_t;
 
 /* UPnP context */
@@ -167,18 +170,19 @@ void	 media_list_audio_streams(const char *filepath);
 int	 media_probe(media_ctx_t *ctx, const char *filepath, int force_transcode);
 int	 media_open_transcode(media_ctx_t *ctx);
 int	 media_restart_transcode(media_ctx_t *ctx, int start_sec);
+void	 media_close_transcode_state(media_ctx_t *ctx);
 int	 media_open_screen(media_ctx_t *ctx);
 void	*media_transcode_thread(void *arg);
 void	*media_capture_thread(void *arg);
 void	 media_close(media_ctx_t *ctx);
 
-/* media.c — sink additions */
+/* media.c — sink/server additions */
 int	 media_probe_avfmt(media_ctx_t *ctx, AVFormatContext *fmt, int force_transcode);
 int	 media_open_remux(media_ctx_t *ctx);
 void	*media_remux_thread(void *arg);
 
-/* sink.c */
-int	 sink_run(upnp_ctx_t *upnp, const char *sock_path, int port,
-	    int vcodec, int bitrate);
+/* server.c */
+int	 server_run(upnp_ctx_t *upnp, httpd_ctx_t *httpd,
+	    const char *ctrl_path, const char *data_path);
 
 #endif /* SEND2TV_H */

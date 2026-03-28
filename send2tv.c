@@ -9,6 +9,8 @@
 #include <poll.h>
 #include <fcntl.h>
 #include <sys/wait.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <getopt.h>
 
 #include "send2tv.h"
@@ -80,34 +82,35 @@ static void
 usage(void)
 {
 	fprintf(stderr,
-	    "usage: send2tv [-tv] [-b kbps] [-c codec] -h host file ...\n"
-	    "       send2tv [-av] [-b kbps] [-c codec] -h host -s\n"
-	    "       send2tv [-v] -h host --sink [--sock path]\n"
+	    "usage: send2tv --server [-h host] [-v] [--ctrl path] [--data path]\n"
+	    "       send2tv [-tv] [-b kbps] [-c codec] [-h host] [--ctrl path] [--data path] file ...\n"
+	    "       send2tv [-av] [-b kbps] [-c codec] [-h host] [--ctrl path] [--data path] -s\n"
 	    "       send2tv [-v] -d\n"
 	    "       send2tv [-v] -q -h host\n"
 	    "       send2tv [-v] -w\n"
 	    "       send2tv [-v] -h host --app\n"
 	    "       send2tv [-v] -h host --app <name>\n"
 	    "\n"
-	    "  -h host   TV IP address or hostname\n"
-	    "  -t        force transcoding\n"
-	    "  -s        stream screen and system audio\n"
-	    "  -a device sndio audio device (default: snd/mon)\n"
-	    "  -d        discover TVs on the network\n"
-	    "  -q        query TV capabilities\n"
-	    "  -c codec  transcode video codec: h264, hevc (default: auto)\n"
-	    "  -p port   HTTP server port (default: auto)\n"
-	    "  -b kbps   video bitrate in kbps (default: 2000)\n"
-	    "  -w        send Wake-on-LAN packet to configured MAC\n"
-	    "  --sink      run as sink daemon, reading from socket\n"
-	    "  --sock path Unix socket path (default: /tmp/send2tv.sock)\n"
-	    "  --app          list installed apps on the TV\n"
-	    "  --app <n>      launch app whose name contains <n> (case-insensitive)\n"
-	    "  --channelmap   list 5.1 channel remapping presets\n"
+	    "  -h host      TV IP address or hostname\n"
+	    "  -t           force transcoding\n"
+	    "  -s           stream screen and system audio\n"
+	    "  -a device    sndio audio device (default: snd/mon)\n"
+	    "  -d           discover TVs on the network\n"
+	    "  -q           query TV capabilities\n"
+	    "  -c codec     transcode video codec: h264, hevc (default: auto)\n"
+	    "  -p port      HTTP server port (default: auto)\n"
+	    "  -b kbps      video bitrate in kbps (default: 2000)\n"
+	    "  -w           send Wake-on-LAN packet to configured MAC\n"
+	    "  --server     run as server (manages TV connection and HTTP server)\n"
+	    "  --ctrl path  control socket path (default: /tmp/send2tv.ctrl)\n"
+	    "  --data path  data socket path (default: /tmp/send2tv.data)\n"
+	    "  --app        list installed apps on the TV\n"
+	    "  --app <n>    launch app whose name contains <n> (case-insensitive)\n"
+	    "  --channelmap list 5.1 channel remapping presets\n"
 	    "  --channelmap <preset>  remap audio channels (forces transcode)\n"
-	    "  --lang         list audio streams in file\n"
-	    "  --lang <id>    select audio stream by index or language tag\n"
-	    "  -v        verbose/debug output\n"
+	    "  --lang       list audio streams in file\n"
+	    "  --lang <id>  select audio stream by index or language tag\n"
+	    "  -v           verbose/debug output\n"
 	    "\n"
 	    "During playback:\n"
 	    "  arrows    seek (left/right: 10s, up/down: 30s)\n"
@@ -130,6 +133,39 @@ sighandler(int sig)
 	running = 0;
 	if (ytdlp_pid > 0)
 		kill(ytdlp_pid, SIGTERM);
+}
+
+/*
+ * Connect to a Unix domain socket at path.
+ * Returns the connected fd on success, -1 on failure.
+ */
+static int
+unix_connect(const char *path)
+{
+	struct sockaddr_un	 addr;
+	int			 fd;
+
+	fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (fd < 0)
+		return -1;
+	memset(&addr, 0, sizeof(addr));
+	addr.sun_family = AF_UNIX;
+	strlcpy(addr.sun_path, path, sizeof(addr.sun_path));
+	if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+		close(fd);
+		return -1;
+	}
+	return fd;
+}
+
+/*
+ * Send a command to the server's control socket.
+ */
+static void
+ctrl_send(int ctrl_fd, const char *cmd)
+{
+	size_t len = strlen(cmd);
+	write(ctrl_fd, cmd, len);
 }
 
 static void
@@ -533,8 +569,9 @@ main(int argc, char *argv[])
 		{ "app",        optional_argument, NULL, 'A' },
 		{ "channelmap", optional_argument, NULL, 'M' },
 		{ "lang",       optional_argument, NULL, 'L' },
-		{ "sink",       no_argument,       NULL, 'S' },
-		{ "sock",       required_argument, NULL, 'K' },
+		{ "server",     no_argument,       NULL, 'S' },
+		{ "ctrl",       required_argument, NULL, 'C' },
+		{ "data",       required_argument, NULL, 'D' },
 		{ NULL,         0,                 NULL,  0  }
 	};
 	const char	*host = NULL;
@@ -552,8 +589,9 @@ main(int argc, char *argv[])
 	int		 query = 0;
 	int		 wol_only = 0;
 	int		 app_mode = 0;
-	int		 sink_mode = 0;
-	const char	*sock_path = "/tmp/send2tv.sock";
+	int		 server_mode = 0;
+	const char	*ctrl_path = "/tmp/send2tv.ctrl";
+	const char	*data_path = "/tmp/send2tv.data";
 	int		 port = 0;
 	int		 bitrate = 2000;
 	int		 vcodec = VCODEC_H264;
@@ -562,7 +600,8 @@ main(int argc, char *argv[])
 	upnp_ctx_t	 upnp;
 	httpd_ctx_t	 httpd;
 	media_ctx_t	 media;
-	char		 media_url[256];
+	int		 ctrl_fd = -1;
+	int		 data_fd = -1;
 
 	load_config(&host, &audiodev, &port, &bitrate, &transcode, &codec, &mac);
 
@@ -638,10 +677,13 @@ main(int argc, char *argv[])
 			/* else NULL → list mode */
 			break;
 		case 'S':
-			sink_mode = 1;
+			server_mode = 1;
 			break;
-		case 'K':
-			sock_path = optarg;
+		case 'C':
+			ctrl_path = optarg;
+			break;
+		case 'D':
+			data_path = optarg;
 			break;
 		default:
 			usage();
@@ -787,8 +829,8 @@ main(int argc, char *argv[])
 		return upnp_query_capabilities(&upnp, 1, NULL, 0) < 0;
 	}
 
-	/* Sink mode: persistent daemon reading video from a Unix socket */
-	if (sink_mode) {
+	/* Server mode: persistent daemon managing TV connection and HTTP server */
+	if (server_mode) {
 		if (host == NULL) {
 			if (discover_and_select(conf_host,
 			    sizeof(conf_host)) < 0)
@@ -802,6 +844,7 @@ main(int argc, char *argv[])
 		signal(SIGPIPE, SIG_IGN);
 
 		memset(&upnp, 0, sizeof(upnp));
+		memset(&httpd, 0, sizeof(httpd));
 		strlcpy(upnp.tv_ip, host, sizeof(upnp.tv_ip));
 		if (mac != NULL)
 			strlcpy(upnp.tv_mac, mac, sizeof(upnp.tv_mac));
@@ -818,33 +861,11 @@ main(int argc, char *argv[])
 		printf("AVTransport: %s:%d%s\n", upnp.tv_ip,
 		    upnp.tv_port, upnp.control_url);
 
-		/* Auto-detect best transcode codec */
-		if (strcmp(codec, "auto") == 0) {
-			char detected[32] = "";
-
-			if (upnp_query_capabilities(&upnp, 0, detected,
-			    sizeof(detected)) == 0 &&
-			    detected[0] != '\0') {
-				if (strcmp(detected, "hevc") == 0)
-					vcodec = VCODEC_HEVC;
-				else
-					vcodec = VCODEC_H264;
-				DPRINTF("auto-detected transcode codec: "
-				    "%s\n", detected);
-			}
-		}
-
-		sink_run(&upnp, sock_path, port, vcodec, bitrate);
+		server_run(&upnp, &httpd, ctrl_path, data_path);
 		return 0;
 	}
 
 	/* Validate arguments */
-	if (host == NULL) {
-		/* No host configured: run interactive discovery */
-		if (discover_and_select(conf_host, sizeof(conf_host)) < 0)
-			return 1;
-		host = conf_host;
-	}
 	if (argc == 0 && !screen)
 		usage();
 	if (argc > 0 && screen)
@@ -857,8 +878,8 @@ main(int argc, char *argv[])
 		vcodec = VCODEC_H264;
 	/* else "auto": try to query TV, default to h264 */
 
-	DPRINTF("host=%s, files=%d, screen=%d, port=%d, codec=%s\n",
-	    host ? host : "(null)", argc, screen, port, codec);
+	DPRINTF("host=%s, files=%d, screen=%d, codec=%s\n",
+	    host ? host : "(null)", argc, screen, codec);
 
 	/* Set up signal handlers */
 	signal(SIGINT, sighandler);
@@ -866,16 +887,27 @@ main(int argc, char *argv[])
 	signal(SIGPIPE, SIG_IGN);
 	atexit(term_restore);
 
-	/* Initialize contexts */
-	memset(&upnp, 0, sizeof(upnp));
-	memset(&httpd, 0, sizeof(httpd));
-	memset(&media, 0, sizeof(media));
+	/* Connect to server */
+	ctrl_fd = unix_connect(ctrl_path);
+	if (ctrl_fd < 0) {
+		fprintf(stderr,
+		    "Cannot connect to server ctrl socket %s\n"
+		    "(is 'send2tv --server' running?)\n", ctrl_path);
+		return 1;
+	}
 
-	strlcpy(upnp.tv_ip, host, sizeof(upnp.tv_ip));
-	if (mac != NULL)
-		strlcpy(upnp.tv_mac, mac, sizeof(upnp.tv_mac));
+	/* Initialize upnp for position queries (host optional) */
+	memset(&upnp, 0, sizeof(upnp));
+	if (host != NULL) {
+		strlcpy(upnp.tv_ip, host, sizeof(upnp.tv_ip));
+		if (mac != NULL)
+			strlcpy(upnp.tv_mac, mac, sizeof(upnp.tv_mac));
+	}
+
+	memset(&media, 0, sizeof(media));
 	media.pipe_rd = -1;
 	media.pipe_wr = -1;
+	media.ctrl_fd = -1;
 	media.bitrate = bitrate;
 	media.vcodec = vcodec;
 	media.sndio_device = audiodev;
@@ -887,85 +919,55 @@ main(int argc, char *argv[])
 		media.mode = MODE_SCREEN;
 		media.running = 1;
 
-		if (upnp_get_local_ip(&upnp) < 0) {
-			fprintf(stderr, "Cannot determine local IP\n");
+		if (!running) {
+			close(ctrl_fd);
 			return 1;
 		}
-		printf("Local IP: %s\n", upnp.local_ip);
 
-		/* Find TV before setting up capture (need codec info) */
-		printf("Connecting to TV at %s...\n", upnp.tv_ip);
-		if (connect_to_tv(&upnp) < 0)
+		/* Connect data socket and set as pipe_wr before open */
+		data_fd = unix_connect(data_path);
+		if (data_fd < 0) {
+			fprintf(stderr, "Cannot connect to server data "
+			    "socket %s\n", data_path);
+			close(ctrl_fd);
 			return 1;
-		printf("AVTransport: %s:%d%s\n", upnp.tv_ip,
-		    upnp.tv_port, upnp.control_url);
-
-		/* Auto-detect best transcode codec for screen mode */
-		if (strcmp(codec, "auto") == 0) {
-			char detected[32] = "";
-
-			if (upnp_query_capabilities(&upnp, 0, detected,
-			    sizeof(detected)) == 0 &&
-			    detected[0] != '\0') {
-				if (strcmp(detected, "hevc") == 0)
-					media.vcodec = VCODEC_HEVC;
-				else
-					media.vcodec = VCODEC_H264;
-				DPRINTF("auto-detected transcode codec: "
-				    "%s\n", detected);
-			}
 		}
-
-		if (!running)
-			return 1;
+		media.pipe_wr = data_fd;
+		media.ctrl_fd = ctrl_fd;
 
 		printf("Setting up screen capture...\n");
 		if (media_open_screen(&media) < 0) {
 			fprintf(stderr, "Failed to set up screen capture\n");
+			close(ctrl_fd);
+			media.pipe_wr = -1;
+			close(data_fd);
 			return 1;
 		}
 
 		if (!running) {
 			media_close(&media);
-			return 1;
-		}
-
-		if (httpd_start(&httpd, &media, port) < 0) {
-			fprintf(stderr, "Failed to start HTTP server\n");
-			media_close(&media);
-			return 1;
-		}
-		printf("HTTP server on port %d\n", httpd.port);
-
-		if (!running) {
-			httpd_stop(&httpd);
-			media_close(&media);
+			close(ctrl_fd);
 			return 1;
 		}
 
 		if (pthread_create(&media.thread, NULL,
 		    media_capture_thread, &media) != 0) {
 			fprintf(stderr, "Failed to start capture\n");
-			httpd_stop(&httpd);
 			media_close(&media);
+			close(ctrl_fd);
 			return 1;
 		}
 
 		if (!running)
 			goto screen_shutdown;
 
-		snprintf(media_url, sizeof(media_url),
-		    "http://%s:%d/media", upnp.local_ip, httpd.port);
-
-		if (upnp_set_uri(&upnp, media_url, media.mime_type,
-		    "Screen", 1, media.dlna_profile) < 0)
-			goto screen_shutdown;
-
-		if (!running)
-			goto screen_shutdown;
-
-		if (upnp_play(&upnp) < 0)
-			goto screen_shutdown;
+		{
+			char play_cmd[256];
+			snprintf(play_cmd, sizeof(play_cmd),
+			    "PLAY %s %s\n",
+			    media.mime_type, media.dlna_profile);
+			ctrl_send(ctrl_fd, play_cmd);
+		}
 
 		if (term_raw_mode() == 0)
 			printf("Playing. Keys: q=quit\n");
@@ -1000,62 +1002,31 @@ main(int argc, char *argv[])
 
 	screen_shutdown:
 		printf("\nStopping...\n");
-		upnp_stop(&upnp);
+		ctrl_send(ctrl_fd, "STOP\n");
 
 		media.running = 0;
 		pthread_join(media.thread, NULL);
 
-		httpd_stop(&httpd);
 		media_close(&media);
+		close(ctrl_fd);
 
 		printf("Done.\n");
 		return 0;
 	}
 
 	/*
-	 * File mode: one-time infrastructure setup, then per-file loop.
+	 * File mode: per-file loop, sending data to server.
+	 * Optionally connect to TV directly for position queries.
 	 */
 
-	/* Determine our local IP */
-	if (upnp_get_local_ip(&upnp) < 0) {
-		fprintf(stderr, "Cannot determine local IP\n");
-		return 1;
-	}
-	printf("Local IP: %s\n", upnp.local_ip);
-
-	/* Start HTTP server (persists across all files) */
-	if (httpd_start(&httpd, &media, port) < 0) {
-		fprintf(stderr, "Failed to start HTTP server\n");
-		return 1;
-	}
-	printf("HTTP server on port %d\n", httpd.port);
-
-	if (!running) {
-		httpd_stop(&httpd);
-		return 1;
-	}
-
-	/* Find TV's AVTransport service (once) */
-	printf("Connecting to TV at %s...\n", upnp.tv_ip);
-	if (connect_to_tv(&upnp) < 0) {
-		httpd_stop(&httpd);
-		return 1;
-	}
-	printf("AVTransport: %s:%d%s\n", upnp.tv_ip,
-	    upnp.tv_port, upnp.control_url);
-
-	/* Auto-detect best transcode codec from TV capabilities */
-	if (strcmp(codec, "auto") == 0) {
-		char detected[32] = "";
-
-		if (upnp_query_capabilities(&upnp, 0, detected,
-		    sizeof(detected)) == 0 && detected[0] != '\0') {
-			if (strcmp(detected, "hevc") == 0)
-				vcodec = VCODEC_HEVC;
-			else
-				vcodec = VCODEC_H264;
-			DPRINTF("auto-detected transcode codec: %s\n",
-			    detected);
+	/* If host is configured, connect for position queries */
+	if (host != NULL && upnp.tv_ip[0] != '\0') {
+		if (upnp_find_transport(&upnp) < 0) {
+			fprintf(stderr, "Warning: cannot connect to TV "
+			    "for position queries (seek may be imprecise)\n");
+			/* Non-fatal: seeking without position info
+			 * is still possible with relative deltas */
+			memset(&upnp, 0, sizeof(upnp));
 		}
 	}
 
@@ -1096,6 +1067,7 @@ main(int argc, char *argv[])
 		media.running = 1;
 		media.pipe_rd = -1;
 		media.pipe_wr = -1;
+		media.ctrl_fd = -1;
 		media.bitrate = bitrate;
 		media.vcodec = vcodec;
 		if (lang_mode && lang_arg != NULL)
@@ -1123,6 +1095,17 @@ main(int argc, char *argv[])
 			continue;
 		}
 
+		/* Connect data socket; set as pipe_wr before opening pipeline */
+		data_fd = unix_connect(data_path);
+		if (data_fd < 0) {
+			fprintf(stderr, "Cannot connect to server data "
+			    "socket %s, skipping\n", data_path);
+			media_close(&media);
+			continue;
+		}
+		media.pipe_wr = data_fd;
+		media.ctrl_fd = ctrl_fd;
+
 		if (media.needs_transcode) {
 			printf("Transcoding %s\n", transcode ?
 			    "forced by -t flag" :
@@ -1130,32 +1113,51 @@ main(int argc, char *argv[])
 			if (media_open_transcode(&media) < 0) {
 				fprintf(stderr, "Failed to set up "
 				    "transcoding, skipping\n");
+				media.pipe_wr = -1;
+				close(data_fd);
+				data_fd = -1;
+				media_close(&media);
+				continue;
+			}
+			if (pthread_create(&media.thread, NULL,
+			    media_transcode_thread, &media) != 0) {
+				fprintf(stderr, "Failed to start "
+				    "transcoding, skipping\n");
+				media.pipe_wr = -1;
+				close(data_fd);
+				data_fd = -1;
 				media_close(&media);
 				continue;
 			}
 		} else {
-			printf("Format supported, sending directly\n");
+			printf("Format supported, remuxing to MPEG-TS\n");
+			if (media_open_remux(&media) < 0) {
+				fprintf(stderr, "Failed to set up "
+				    "remux, skipping\n");
+				media.pipe_wr = -1;
+				close(data_fd);
+				data_fd = -1;
+				media_close(&media);
+				continue;
+			}
+			if (pthread_create(&media.thread, NULL,
+			    media_remux_thread, &media) != 0) {
+				fprintf(stderr, "Failed to start "
+				    "remux, skipping\n");
+				media.pipe_wr = -1;
+				close(data_fd);
+				data_fd = -1;
+				media_close(&media);
+				continue;
+			}
 		}
+		/* data_fd is now owned by media.pipe_wr / thread */
+		data_fd = -1;
 
 		if (!running) {
 			media_close(&media);
 			break;
 		}
-
-		/* Start transcode thread if needed */
-		if (media.needs_transcode) {
-			if (pthread_create(&media.thread, NULL,
-			    media_transcode_thread, &media) != 0) {
-				fprintf(stderr, "Failed to start "
-				    "transcoding, skipping\n");
-				media_close(&media);
-				continue;
-			}
-		}
-
-		/* Build media URL */
-		snprintf(media_url, sizeof(media_url),
-		    "http://%s:%d/media", upnp.local_ip, httpd.port);
 
 		/* Derive title from yt-dlp metadata or filename */
 		if (ytdlp_title[0] != '\0')
@@ -1164,18 +1166,19 @@ main(int argc, char *argv[])
 			title = strrchr(file, '/');
 			title = (title != NULL) ? title + 1 : file;
 		}
+		(void)title; /* title used for display only in client mode */
 
-		/* Set URI and play */
-		printf("Sending media URL to TV...\n");
-		if (upnp_set_uri(&upnp, media_url, media.mime_type,
-		    title, media.needs_transcode,
-		    media.dlna_profile) < 0)
-			goto next_file;
+		/* Tell server to start playback */
+		{
+			char play_cmd[256];
+			snprintf(play_cmd, sizeof(play_cmd),
+			    "PLAY %s %s\n",
+			    media.mime_type, media.dlna_profile);
+			printf("Sending PLAY to server...\n");
+			ctrl_send(ctrl_fd, play_cmd);
+		}
 
 		if (!running)
-			goto next_file;
-
-		if (upnp_play(&upnp) < 0)
 			goto next_file;
 
 		/* Enter raw terminal mode for key input */
@@ -1224,57 +1227,87 @@ main(int argc, char *argv[])
 					int epos = 0, etarget;
 
 					if (!end_mode) {
-						upnp_get_position(&upnp,
-						    &epos);
+						if (upnp.control_url[0] != '\0')
+							upnp_get_position(&upnp,
+							    &epos);
 						etarget = media.duration_sec
 						    - 60;
 						if (etarget < 0)
 							etarget = 0;
-						saved_pos = media.needs_transcode
-						    ? media.start_sec + epos
-						    : epos;
+						saved_pos = media.start_sec
+						    + epos;
 						end_mode = 1;
 					} else {
 						etarget = saved_pos;
 						end_mode = 0;
 					}
 
-					if (!media.needs_transcode) {
-						upnp_seek(&upnp, etarget);
-					} else {
-						DPRINTF("seek: restart "
-						    "transcode at %ds\n",
-						    etarget);
-						upnp_stop(&upnp);
-						media.running = 0;
-						pthread_join(media.thread,
-						    NULL);
-						if (media_restart_transcode(
-						    &media, etarget) < 0) {
-							fprintf(stderr,
-							    "Seek failed\n");
-							running = 0;
-							break;
-						}
-						if (pthread_create(
+					DPRINTF("seek: restart at %ds\n",
+					    etarget);
+					ctrl_send(ctrl_fd, "STOP\n");
+					media.running = 0;
+					pthread_join(media.thread, NULL);
+
+					data_fd = unix_connect(data_path);
+					if (data_fd < 0) {
+						fprintf(stderr,
+						    "Seek: data connect "
+						    "failed\n");
+						running = 0;
+						break;
+					}
+					media_close_transcode_state(&media);
+					media.pipe_wr = data_fd;
+					media.ctrl_fd = ctrl_fd;
+					media.running = 1;
+					media.start_sec = etarget;
+					av_seek_frame(media.ifmt_ctx, -1,
+					    (int64_t)etarget * AV_TIME_BASE,
+					    AVSEEK_FLAG_BACKWARD);
+					if (media.video_dec)
+						avcodec_flush_buffers(
+						    media.video_dec);
+					if (media.audio_dec)
+						avcodec_flush_buffers(
+						    media.audio_dec);
+					if (media.needs_transcode) {
+						if (media_open_transcode(
+						    &media) < 0 ||
+						    pthread_create(
 						    &media.thread, NULL,
 						    media_transcode_thread,
 						    &media) != 0) {
 							fprintf(stderr,
-							    "Failed to restart "
-							    "transcoding\n");
+							    "Seek failed\n");
+							close(data_fd);
+							data_fd = -1;
 							running = 0;
 							break;
 						}
-						if (upnp_set_uri(&upnp,
-						    media_url,
+					} else {
+						if (media_open_remux(
+						    &media) < 0 ||
+						    pthread_create(
+						    &media.thread, NULL,
+						    media_remux_thread,
+						    &media) != 0) {
+							fprintf(stderr,
+							    "Seek failed\n");
+							close(data_fd);
+							data_fd = -1;
+							running = 0;
+							break;
+						}
+					}
+					data_fd = -1;
+					{
+						char play_cmd[256];
+						snprintf(play_cmd,
+						    sizeof(play_cmd),
+						    "PLAY %s %s\n",
 						    media.mime_type,
-						    title, 1,
-						    media.dlna_profile) < 0 ||
-						    upnp_play(&upnp) < 0) {
-							running = 0;
-							break;
-						}
+						    media.dlna_profile);
+						ctrl_send(ctrl_fd, play_cmd);
 					}
 					continue;
 				}
@@ -1294,74 +1327,84 @@ main(int argc, char *argv[])
 				if (delta == 0)
 					continue;
 
-				if (!media.needs_transcode) {
-					/* Direct file: clamp to [0, duration-5] */
+				{
 					int pos = 0, target;
 
-					upnp_get_position(&upnp, &pos);
-					target = pos + delta;
-					if (target < 0)
-						target = 0;
-					if (media.duration_sec > 0 &&
-					    target > media.duration_sec - 5)
-						target = media.duration_sec - 5;
-					upnp_seek(&upnp, target);
-				} else {
-					/* Transcoded: restart from
-					 * new position */
-					int pos, target;
-
-					if (upnp_get_position(&upnp,
-					    &pos) < 0)
-						continue;
-
-					target = media.start_sec +
-					    pos + delta;
+					if (upnp.control_url[0] != '\0')
+						upnp_get_position(&upnp, &pos);
+					target = media.start_sec + pos + delta;
 					if (target < 0)
 						target = 0;
 					if (media.duration_sec > 0 &&
 					    target > media.duration_sec - 5)
 						target = media.duration_sec - 5;
 
-					DPRINTF("seek: restart "
-					    "transcode at %ds\n",
+					DPRINTF("seek: restart at %ds\n",
 					    target);
-
-					upnp_stop(&upnp);
+					ctrl_send(ctrl_fd, "STOP\n");
 					media.running = 0;
-					pthread_join(media.thread,
-					    NULL);
+					pthread_join(media.thread, NULL);
 
-					if (media_restart_transcode(
-					    &media, target) < 0) {
+					data_fd = unix_connect(data_path);
+					if (data_fd < 0) {
 						fprintf(stderr,
-						    "Seek failed\n");
+						    "Seek: data connect "
+						    "failed\n");
 						running = 0;
 						break;
 					}
-
-					if (pthread_create(
-					    &media.thread, NULL,
-					    media_transcode_thread,
-					    &media) != 0) {
-						fprintf(stderr,
-						    "Failed to "
-						    "restart "
-						    "transcoding\n");
-						running = 0;
-						break;
+					media_close_transcode_state(&media);
+					media.pipe_wr = data_fd;
+					media.ctrl_fd = ctrl_fd;
+					media.running = 1;
+					media.start_sec = target;
+					av_seek_frame(media.ifmt_ctx, -1,
+					    (int64_t)target * AV_TIME_BASE,
+					    AVSEEK_FLAG_BACKWARD);
+					if (media.video_dec)
+						avcodec_flush_buffers(
+						    media.video_dec);
+					if (media.audio_dec)
+						avcodec_flush_buffers(
+						    media.audio_dec);
+					if (media.needs_transcode) {
+						if (media_open_transcode(
+						    &media) < 0 ||
+						    pthread_create(
+						    &media.thread, NULL,
+						    media_transcode_thread,
+						    &media) != 0) {
+							fprintf(stderr,
+							    "Seek failed\n");
+							close(data_fd);
+							data_fd = -1;
+							running = 0;
+							break;
+						}
+					} else {
+						if (media_open_remux(
+						    &media) < 0 ||
+						    pthread_create(
+						    &media.thread, NULL,
+						    media_remux_thread,
+						    &media) != 0) {
+							fprintf(stderr,
+							    "Seek failed\n");
+							close(data_fd);
+							data_fd = -1;
+							running = 0;
+							break;
+						}
 					}
-
-					if (upnp_set_uri(&upnp,
-					    media_url,
-					    media.mime_type,
-					    title, 1,
-					    media.dlna_profile)
-					    < 0 ||
-					    upnp_play(&upnp)
-					    < 0) {
-						running = 0;
-						break;
+					data_fd = -1;
+					{
+						char play_cmd[256];
+						snprintf(play_cmd,
+						    sizeof(play_cmd),
+						    "PLAY %s %s\n",
+						    media.mime_type,
+						    media.dlna_profile);
+						ctrl_send(ctrl_fd, play_cmd);
 					}
 				}
 			}
@@ -1371,16 +1414,15 @@ main(int argc, char *argv[])
 
 	next_file:
 		printf("\nStopping...\n");
-		upnp_stop(&upnp);
+		ctrl_send(ctrl_fd, "STOP\n");
 
 		media.running = 0;
-		if (media.needs_transcode)
-			pthread_join(media.thread, NULL);
+		pthread_join(media.thread, NULL);
 
 		media_close(&media);
 	}
 
-	httpd_stop(&httpd);
+	close(ctrl_fd);
 
 	printf("Done.\n");
 	return 0;

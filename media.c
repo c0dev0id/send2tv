@@ -472,12 +472,9 @@ media_probe(media_ctx_t *ctx, const char *filepath, int force_transcode)
 		return -1;
 	}
 
-	/* Keep format context open if we need to transcode */
-	if (ctx->needs_transcode) {
-		ctx->ifmt_ctx = fmt;
-	} else {
-		avformat_close_input(&fmt);
-	}
+	/* Always keep format context open (client mode may remux even for
+	 * passthrough files). */
+	ctx->ifmt_ctx = fmt;
 
 	return 0;
 }
@@ -682,15 +679,16 @@ init_output(media_ctx_t *ctx, int has_video, int has_audio)
 	AVIOContext	*avio;
 	int		 ret;
 
-	if (pipe(pipefd) < 0) {
-		perror("pipe");
-		return -1;
+	if (ctx->pipe_wr < 0) {
+		if (pipe(pipefd) < 0) {
+			perror("pipe");
+			return -1;
+		}
+		ctx->pipe_rd = pipefd[0];
+		ctx->pipe_wr = pipefd[1];
+		DPRINTF("media: output pipe created (rd=%d, wr=%d)\n",
+		    ctx->pipe_rd, ctx->pipe_wr);
 	}
-	ctx->pipe_rd = pipefd[0];
-	ctx->pipe_wr = pipefd[1];
-
-	DPRINTF("media: output pipe created (rd=%d, wr=%d)\n",
-	    ctx->pipe_rd, ctx->pipe_wr);
 
 	ret = avformat_alloc_output_context2(&ctx->ofmt_ctx, NULL,
 	    "mpegts", NULL);
@@ -764,12 +762,14 @@ init_output_remux(media_ctx_t *ctx)
 	AVIOContext	*avio;
 	int		 ret;
 
-	if (pipe(pipefd) < 0) {
-		perror("pipe");
-		return -1;
+	if (ctx->pipe_wr < 0) {
+		if (pipe(pipefd) < 0) {
+			perror("pipe");
+			return -1;
+		}
+		ctx->pipe_rd = pipefd[0];
+		ctx->pipe_wr = pipefd[1];
 	}
-	ctx->pipe_rd = pipefd[0];
-	ctx->pipe_wr = pipefd[1];
 
 	ret = avformat_alloc_output_context2(&ctx->ofmt_ctx, NULL,
 	    "mpegts", NULL);
@@ -888,6 +888,15 @@ media_remux_thread(void *arg)
 	}
 
 	av_write_trailer(ctx->ofmt_ctx);
+
+	/*
+	 * On natural stream end (not aborted by seek/quit), notify the server
+	 * to stop TV playback before the data socket closes so the TV
+	 * receives Stop before seeing the HTTP stream EOF.
+	 */
+	if (ctx->running && running && ctx->ctrl_fd >= 0)
+		write(ctx->ctrl_fd, "STOP\n", 5);
+
 	if (ctx->pipe_wr >= 0) {
 		close(ctx->pipe_wr);
 		ctx->pipe_wr = -1;
@@ -1746,6 +1755,14 @@ media_transcode_thread(void *arg)
 	av_write_trailer(ctx->ofmt_ctx);
 	av_packet_free(&pkt);
 
+	/*
+	 * On natural stream end (not aborted by seek/quit), notify the server
+	 * to stop TV playback before the data socket closes so the TV
+	 * receives Stop before seeing the HTTP stream EOF.
+	 */
+	if (ctx->running && running && ctx->ctrl_fd >= 0)
+		write(ctx->ctrl_fd, "STOP\n", 5);
+
 	close(ctx->pipe_wr);
 	ctx->pipe_wr = -1;
 	ctx->running = 0;
@@ -1833,7 +1850,7 @@ media_capture_thread(void *arg)
  * Free transcode-specific resources but keep the input format context
  * and VAAPI device so the pipeline can be restarted at a new position.
  */
-static void
+void
 media_close_transcode_state(media_ctx_t *ctx)
 {
 	if (ctx->audio_fifo != NULL) {
