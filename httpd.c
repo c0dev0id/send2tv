@@ -139,7 +139,8 @@ static void
 serve_pipe(int client_fd, media_ctx_t *media, int head_only)
 {
 	char		 buf[SEND2TV_BUF_SIZE];
-	ssize_t		 n;
+	ssize_t		 n = -1;
+	int		 was_sink = (media->mode == MODE_SINK);
 
 	DPRINTF("httpd: serving from pipe, mime=%s\n", media->mime_type);
 
@@ -156,6 +157,17 @@ serve_pipe(int client_fd, media_ctx_t *media, int head_only)
 			break;
 		if (send_all(client_fd, buf, n) < 0)
 			break;
+	}
+
+	/*
+	 * In sink mode, linger after the pipe closes so the main thread
+	 * can send upnp_stop while the HTTP connection is still open.
+	 * Without this, the TV sees stream EOF before the Stop command
+	 * arrives and may show an error instead of returning to idle.
+	 */
+	if (was_sink && n == 0) {
+		struct pollfd p = { .fd = -1 };
+		poll(&p, 1, 500);
 	}
 }
 

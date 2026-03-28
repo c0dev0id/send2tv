@@ -257,6 +257,22 @@ sink_run(upnp_ctx_t *upnp, const char *sock_path, int port,
 		}
 
 		pthread_join(media.thread, NULL);
+
+		if (!running) {
+			media_close(&media);
+			close(client_fd);
+			break;
+		}
+
+		/*
+		 * Send Stop before media_close/close so upnp_stop fires
+		 * while httpd is still lingering with the HTTP connection
+		 * open (see serve_pipe linger). This ensures the TV
+		 * receives the Stop command before the stream EOF.
+		 */
+		printf("Sink: segment done, going idle\n");
+		upnp_stop(upnp);
+
 		media_close(&media);
 		close(client_fd);
 
@@ -265,12 +281,6 @@ sink_run(upnp_ctx_t *upnp, const char *sock_path, int port,
 		media.pipe_rd = -1;
 		media.pipe_wr = -1;
 		media.mode    = MODE_SINK;
-
-		if (!running)
-			break;
-
-		printf("Sink: segment done, going idle\n");
-		upnp_stop(upnp);
 	}
 
 done:
