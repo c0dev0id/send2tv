@@ -472,13 +472,8 @@ ytdlp_resolve(const char *url, char *out_url, size_t url_sz,
 {
 	const char *args[] = {
 		"yt-dlp", "--no-playlist",
-		"-f", "best[vcodec^=avc1][ext=mp4]"
-		    "/best[vcodec^=avc1]"
-		    "/best[ext=mp4]"
-		    "/best[vcodec^=hev1]"
-		    "/best[vcodec^=hvc1]"
-		    "/best[height<=1080]"
-		    "/best",
+		"-S", "vcodec:h264,proto,ext:mp4,vcodec:hevc",
+		"-f", "best[height<=1080]/best",
 		"--print", "%(title)s\n%(url)s",
 		"--", url, NULL
 	};
