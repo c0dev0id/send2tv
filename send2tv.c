@@ -1144,20 +1144,26 @@ main(int argc, char *argv[])
 							    / 1000000;
 							if (elapsed_ms >= 500) {
 								seek_pending = 0;
-								if (upnp.control_url[0] != '\0')
+								if (upnp.control_url[0] != '\0') {
 									upnp_get_position(
 									    &upnp, &pos);
-								target = pos +
-								    seek_delta;
-								seek_delta = 0;
-								if (target < 0)
-									target = 0;
-								if (dur > 0 &&
-								    target > dur - 5)
-									target =
-									    dur - 5;
-								upnp_seek(&upnp,
-								    target);
+									target = pos +
+									    seek_delta;
+									seek_delta = 0;
+									if (target < 0)
+										target = 0;
+									if (dur > 0 &&
+									    target > dur - 5)
+										target =
+										    dur - 5;
+									upnp_seek(&upnp,
+									    target);
+								} else {
+									seek_delta = 0;
+									fprintf(stderr,
+									    "Seek unavailable:"
+									    " no TV connection\n");
+								}
 								continue;
 							} else {
 								timeout = (int)(500 - elapsed_ms);
