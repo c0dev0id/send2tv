@@ -214,7 +214,10 @@ handle_request(int client_fd, httpd_ctx_t *ctx)
 	}
 
 	if (media->needs_transcode || media->mode == MODE_SCREEN ||
-	    media->mode == MODE_SINK)
+	    media->mode == MODE_SINK ||
+	    (media->filepath != NULL &&
+	     (strncmp(media->filepath, "http://", 7) == 0 ||
+	      strncmp(media->filepath, "https://", 8) == 0)))
 		serve_pipe(client_fd, media, head_only);
 	else
 		serve_file(client_fd, media, head_only, range_start);

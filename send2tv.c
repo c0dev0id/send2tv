@@ -1058,7 +1058,6 @@ main(int argc, char *argv[])
 			DPRINTF("yt-dlp title='%s' url='%s'\n",
 			    ytdlp_title, ytdlp_url);
 			file = ytdlp_url;
-			force_tc = 1;
 		} else {
 			printf("\n[%d/%d] %s\n", fileidx + 1, argc, file);
 		}

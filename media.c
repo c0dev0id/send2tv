@@ -73,13 +73,15 @@ video_container_ok(enum AVCodecID codec, const char *fmt)
 		    strstr(fmt, "mov") != NULL ||
 		    strstr(fmt, "3gp") != NULL ||
 		    strstr(fmt, "flv") != NULL ||
-		    strstr(fmt, "mpeg") != NULL;
+		    strstr(fmt, "mpeg") != NULL ||
+		    strstr(fmt, "hls") != NULL;	/* HLS → remux to MPEG-TS */
 	case AV_CODEC_ID_HEVC:
 		/* HEVC: MKV, MP4, TS only */
 		return strstr(fmt, "matroska") != NULL ||
 		    strstr(fmt, "mp4") != NULL ||
 		    strstr(fmt, "mov") != NULL ||
-		    strstr(fmt, "mpegts") != NULL;
+		    strstr(fmt, "mpegts") != NULL ||
+		    strstr(fmt, "hls") != NULL;	/* HLS → remux to MPEG-TS */
 	case AV_CODEC_ID_VP8:
 	case AV_CODEC_ID_VP9:
 	case AV_CODEC_ID_AV1:
