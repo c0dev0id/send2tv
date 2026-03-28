@@ -1107,7 +1107,7 @@ main(int argc, char *argv[])
 
 				if (term_raw_mode() == 0)
 					printf("Direct play. Keys: "
-					    "arrows=seek, q=next, Q=quit\n");
+					    "q=next, Q=quit\n");
 				else
 					printf("Direct play. "
 					    "Press Ctrl+C to stop.\n");
@@ -1116,62 +1116,12 @@ main(int argc, char *argv[])
 					struct pollfd	 pfd;
 					unsigned char	 buf[8];
 					ssize_t		 n;
-					int		 seek_delta = 0;
-					int		 seek_pending = 0;
-					struct timespec	 seek_ts;
-					int		 dur = ytdlp_duration;
 
 					pfd.fd = STDIN_FILENO;
 					pfd.events = POLLIN;
 
 					while (running) {
-						int timeout = 500;
-
-						if (seek_pending) {
-							struct timespec now;
-							long elapsed_ms;
-							int pos = 0, target;
-
-							clock_gettime(
-							    CLOCK_MONOTONIC,
-							    &now);
-							elapsed_ms =
-							    (now.tv_sec -
-							    seek_ts.tv_sec)
-							    * 1000 +
-							    (now.tv_nsec -
-							    seek_ts.tv_nsec)
-							    / 1000000;
-							if (elapsed_ms >= 500) {
-								seek_pending = 0;
-								if (upnp.control_url[0] != '\0') {
-									upnp_get_position(
-									    &upnp, &pos);
-									target = pos +
-									    seek_delta;
-									seek_delta = 0;
-									if (target < 0)
-										target = 0;
-									if (dur > 0 &&
-									    target > dur - 5)
-										target =
-										    dur - 5;
-									upnp_seek(&upnp,
-									    target);
-								} else {
-									seek_delta = 0;
-									fprintf(stderr,
-									    "Seek unavailable:"
-									    " no TV connection\n");
-								}
-								continue;
-							} else {
-								timeout = (int)(500 - elapsed_ms);
-							}
-						}
-
-						if (poll(&pfd, 1, timeout)
-						    <= 0)
+						if (poll(&pfd, 1, 500) <= 0)
 							continue;
 
 						n = read(STDIN_FILENO, buf,
@@ -1185,31 +1135,6 @@ main(int argc, char *argv[])
 						    buf[0] == 0x03) {
 							running = 0;
 							break;
-						}
-
-						/* Arrow key seek */
-						if (n >= 3 &&
-						    buf[0] == 0x1b &&
-						    buf[1] == '[') {
-							int delta = 0;
-
-							if (buf[2] == 'C')
-								delta = 30;
-							else if (buf[2] == 'D')
-								delta = -30;
-							else if (buf[2] == 'A')
-								delta = 300;
-							else if (buf[2] == 'B')
-								delta = -300;
-							if (delta != 0) {
-								seek_delta +=
-								    delta;
-								seek_pending =
-								    1;
-								clock_gettime(
-								    CLOCK_MONOTONIC,
-								    &seek_ts);
-							}
 						}
 					}
 				}
