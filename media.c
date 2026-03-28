@@ -9,12 +9,15 @@
 
 /*
  * FFmpeg interrupt callback: returns non-zero to abort blocking I/O.
+ * Checks both the per-stream running flag and the global running flag
+ * so that a Ctrl+C (which sets the global) interrupts any FFmpeg
+ * blocking call regardless of which phase we are in.
  */
 static int
 ffmpeg_interrupt_cb(void *opaque)
 {
 	media_ctx_t *ctx = opaque;
-	return !ctx->running;
+	return !ctx->running || !running;
 }
 
 /*
@@ -333,17 +336,26 @@ media_probe(media_ctx_t *ctx, const char *filepath, int force_transcode)
 	enum AVCodecID		 vid_codec = AV_CODEC_ID_NONE;
 	enum AVCodecID		 aud_codec = AV_CODEC_ID_NONE;
 
+	fmt = avformat_alloc_context();
+	if (fmt == NULL)
+		return -1;
+	fmt->interrupt_callback.callback = ffmpeg_interrupt_cb;
+	fmt->interrupt_callback.opaque = ctx;
+
 	ret = avformat_open_input(&fmt, filepath, NULL, NULL);
 	if (ret < 0) {
-		fprintf(stderr, "Cannot open %s: %s\n", filepath,
-		    av_err2str(ret));
+		/* fmt was freed by avformat_open_input on failure */
+		if (running)
+			fprintf(stderr, "Cannot open %s: %s\n", filepath,
+			    av_err2str(ret));
 		return -1;
 	}
 
 	ret = avformat_find_stream_info(fmt, NULL);
 	if (ret < 0) {
-		fprintf(stderr, "Cannot find stream info: %s\n",
-		    av_err2str(ret));
+		if (running)
+			fprintf(stderr, "Cannot find stream info: %s\n",
+			    av_err2str(ret));
 		avformat_close_input(&fmt);
 		return -1;
 	}

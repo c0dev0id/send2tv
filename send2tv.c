@@ -14,7 +14,7 @@
 #include "send2tv.h"
 
 int verbose = 0;
-static volatile int running = 1;
+volatile int running = 1;
 static volatile pid_t ytdlp_pid = 0;
 static struct termios orig_termios;
 static int term_raw = 0;
@@ -1051,8 +1051,10 @@ main(int argc, char *argv[])
 
 		/* Probe */
 		if (media_probe(&media, file, force_tc) < 0) {
-			fprintf(stderr, "Failed to probe %s, skipping\n",
-			    file);
+			if (running)
+				fprintf(stderr,
+				    "Failed to probe %s, skipping\n",
+				    file);
 			continue;
 		}
 

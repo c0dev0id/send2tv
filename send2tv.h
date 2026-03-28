@@ -26,6 +26,7 @@
 #define SEND2TV_DEFAULT_PORT	0	/* ephemeral */
 
 extern int verbose;
+extern volatile int running;
 #define DPRINTF(fmt, ...) \
 	do { if (verbose) fprintf(stderr, "debug: " fmt, ##__VA_ARGS__); } while (0)
 
