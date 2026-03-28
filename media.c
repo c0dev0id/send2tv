@@ -530,33 +530,15 @@ init_vaapi(media_ctx_t *ctx)
 }
 
 /*
- * get_format callback: prefer AV_PIX_FMT_VAAPI if offered by the decoder.
- */
-static enum AVPixelFormat
-get_vaapi_format(AVCodecContext *avctx, const enum AVPixelFormat *pix_fmts)
-{
-	const enum AVPixelFormat *p;
-
-	(void)avctx;
-	for (p = pix_fmts; *p != AV_PIX_FMT_NONE; p++) {
-		if (*p == AV_PIX_FMT_VAAPI)
-			return AV_PIX_FMT_VAAPI;
-	}
-	return pix_fmts[0];
-}
-
-/*
  * Set up the video filter graph for VAAPI encoding:
- *   format=nv12,hwupload,scale_vaapi=format=nv12  (software decode)
- *   scale_vaapi=format=nv12                        (hardware decode)
+ *   format=nv12,hwupload,scale_vaapi=format=nv12
  * For software fallback:
  *   format=yuv420p
  */
 static int
 init_video_filters(media_ctx_t *ctx, int width, int height,
     AVRational time_base, enum AVPixelFormat pix_fmt, int use_vaapi,
-    enum AVColorSpace color_space, enum AVColorRange color_range,
-    AVBufferRef *dec_hw_frames)
+    enum AVColorSpace color_space, enum AVColorRange color_range)
 {
 	char			 args[512];
 	const AVFilter		*buffersrc, *buffersink;
@@ -569,67 +551,23 @@ init_video_filters(media_ctx_t *ctx, int width, int height,
 	buffersrc = avfilter_get_by_name("buffer");
 	buffersink = avfilter_get_by_name("buffersink");
 
+	snprintf(args, sizeof(args),
+	    "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d"
+	    ":colorspace=%d:range=%d",
+	    width, height, pix_fmt, time_base.num, time_base.den,
+	    (int)color_space, (int)color_range);
+
+	ret = avfilter_graph_create_filter(&ctx->buffersrc_ctx, buffersrc,
+	    "in", args, NULL, ctx->filter_graph);
+	if (ret < 0)
+		goto fail;
+
 	ret = avfilter_graph_create_filter(&ctx->buffersink_ctx, buffersink,
 	    "out", NULL, NULL, ctx->filter_graph);
 	if (ret < 0)
 		goto fail;
 
-	if (use_vaapi && dec_hw_frames != NULL) {
-		AVBufferSrcParameters	*par;
-		AVFilterContext		*scale_ctx;
-		const AVFilter		*scale_f;
-
-		DPRINTF("media: filter graph: scale_vaapi=format=nv12 "
-		    "(hw decode path)\n");
-
-		/*
-		 * VAAPI decode path: frames are already on the GPU.
-		 * Create buffersrc via AVBufferSrcParameters so we can
-		 * pass hw_frames_ctx; no format+hwupload needed.
-		 */
-		ret = avfilter_graph_create_filter(&ctx->buffersrc_ctx,
-		    buffersrc, "in", NULL, NULL, ctx->filter_graph);
-		if (ret < 0)
-			goto fail;
-
-		par = av_buffersrc_parameters_alloc();
-		if (par == NULL)
-			goto fail;
-		par->format = AV_PIX_FMT_VAAPI;
-		par->width = width;
-		par->height = height;
-		par->time_base = time_base;
-		par->color_space = color_space;
-		par->color_range = color_range;
-		par->hw_frames_ctx = av_buffer_ref(dec_hw_frames);
-		ret = av_buffersrc_parameters_set(ctx->buffersrc_ctx, par);
-		av_free(par);
-		if (ret < 0)
-			goto fail;
-
-		scale_f = avfilter_get_by_name("scale_vaapi");
-		if (scale_f == NULL)
-			goto fail;
-
-		scale_ctx = avfilter_graph_alloc_filter(ctx->filter_graph,
-		    scale_f, "scale_vaapi");
-		if (scale_ctx == NULL)
-			goto fail;
-
-		scale_ctx->hw_device_ctx = av_buffer_ref(ctx->hw_device_ctx);
-
-		ret = avfilter_init_str(scale_ctx, "format=nv12");
-		if (ret < 0)
-			goto fail;
-
-		/* buffersrc -> scale_vaapi -> buffersink */
-		ret = avfilter_link(ctx->buffersrc_ctx, 0, scale_ctx, 0);
-		if (ret < 0)
-			goto fail;
-		ret = avfilter_link(scale_ctx, 0, ctx->buffersink_ctx, 0);
-		if (ret < 0)
-			goto fail;
-	} else if (use_vaapi) {
+	if (use_vaapi) {
 		AVFilterContext *fmt_ctx, *hwup_ctx, *scale_ctx;
 		const AVFilter  *fmt_f, *hwup_f, *scale_f;
 
@@ -641,17 +579,6 @@ init_video_filters(media_ctx_t *ctx, int width, int height,
 
 		DPRINTF("media: filter graph: "
 		    "format=nv12,hwupload,scale_vaapi=format=nv12\n");
-
-		snprintf(args, sizeof(args),
-		    "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d"
-		    ":colorspace=%d:range=%d",
-		    width, height, pix_fmt, time_base.num, time_base.den,
-		    (int)color_space, (int)color_range);
-
-		ret = avfilter_graph_create_filter(&ctx->buffersrc_ctx,
-		    buffersrc, "in", args, NULL, ctx->filter_graph);
-		if (ret < 0)
-			goto fail;
 
 		/*
 		 * Build VAAPI filter chain manually so we can set
@@ -702,17 +629,6 @@ init_video_filters(media_ctx_t *ctx, int width, int height,
 		AVFilterInOut *inputs, *outputs;
 
 		DPRINTF("media: filter graph: format=yuv420p\n");
-
-		snprintf(args, sizeof(args),
-		    "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d"
-		    ":colorspace=%d:range=%d",
-		    width, height, pix_fmt, time_base.num, time_base.den,
-		    (int)color_space, (int)color_range);
-
-		ret = avfilter_graph_create_filter(&ctx->buffersrc_ctx,
-		    buffersrc, "in", args, NULL, ctx->filter_graph);
-		if (ret < 0)
-			goto fail;
 
 		inputs = avfilter_inout_alloc();
 		outputs = avfilter_inout_alloc();
@@ -1228,7 +1144,6 @@ media_open_transcode(media_ctx_t *ctx)
 {
 	const AVCodec	*dec;
 	AVStream	*in_st;
-	AVBufferRef	*dec_hw_frames;
 	int		 ret, use_vaapi;
 	int		 width, height;
 	AVRational	 tb, fr;
@@ -1241,13 +1156,7 @@ media_open_transcode(media_ctx_t *ctx)
 	ctx->ifmt_ctx->interrupt_callback.callback = ffmpeg_interrupt_cb;
 	ctx->ifmt_ctx->interrupt_callback.opaque = ctx;
 
-	/* Init VAAPI early so the decoder can use it */
-	use_vaapi = 0;
-	if (ctx->video_idx >= 0 && init_vaapi(ctx) == 0)
-		use_vaapi = 1;
-
 	/* Open video decoder */
-	dec_hw_frames = NULL;
 	if (ctx->video_idx >= 0) {
 		in_st = ctx->ifmt_ctx->streams[ctx->video_idx];
 		dec = avcodec_find_decoder(in_st->codecpar->codec_id);
@@ -1258,39 +1167,12 @@ media_open_transcode(media_ctx_t *ctx)
 		ctx->video_dec = avcodec_alloc_context3(dec);
 		avcodec_parameters_to_context(ctx->video_dec,
 		    in_st->codecpar);
-
-		/* Configure VAAPI hardware decode if available */
-		if (use_vaapi) {
-			ctx->video_dec->hw_device_ctx =
-			    av_buffer_ref(ctx->hw_device_ctx);
-			ctx->video_dec->get_format = get_vaapi_format;
-		}
-
 		ret = avcodec_open2(ctx->video_dec, dec, NULL);
 		if (ret < 0) {
 			fprintf(stderr, "Cannot open video decoder: %s\n",
 			    av_err2str(ret));
 			return -1;
 		}
-
-		/*
-		 * Try to get hw_frames_ctx for the VAAPI decode path.
-		 * On failure (codec does not support VAAPI decode), fall
-		 * back transparently: dec_hw_frames stays NULL and the
-		 * filter graph will use format+hwupload instead.
-		 */
-		if (use_vaapi) {
-			ret = avcodec_get_hw_frames_parameters(
-			    ctx->video_dec, ctx->hw_device_ctx,
-			    AV_PIX_FMT_VAAPI, &dec_hw_frames);
-			if (ret >= 0)
-				ret = av_hwframe_ctx_init(dec_hw_frames);
-			if (ret < 0) {
-				av_buffer_unref(&dec_hw_frames);
-				dec_hw_frames = NULL;
-			}
-		}
-
 		width = ctx->video_dec->width;
 		height = ctx->video_dec->height;
 		pix_fmt = ctx->video_dec->pix_fmt;
@@ -1305,7 +1187,6 @@ media_open_transcode(media_ctx_t *ctx)
 		pix_fmt = AV_PIX_FMT_NONE;
 		tb = (AVRational){1, 48000};
 		fr = (AVRational){0, 1};
-		dec_hw_frames = NULL;
 	}
 
 	/* Open audio decoder */
@@ -1323,6 +1204,11 @@ media_open_transcode(media_ctx_t *ctx)
 		}
 	}
 
+	/* Init VAAPI */
+	use_vaapi = 0;
+	if (ctx->video_idx >= 0 && init_vaapi(ctx) == 0)
+		use_vaapi = 1;
+
 	/* Init video encoder */
 	if (ctx->video_idx >= 0) {
 		if (init_video_encoder(ctx, width, height,
@@ -1331,10 +1217,6 @@ media_open_transcode(media_ctx_t *ctx)
 				/* Retry with software */
 				fprintf(stderr, "VAAPI encoder failed, "
 				    "trying software\n");
-				av_buffer_unref(&ctx->video_dec->hw_device_ctx);
-				ctx->video_dec->get_format = NULL;
-				av_buffer_unref(&dec_hw_frames);
-				dec_hw_frames = NULL;
 				av_buffer_unref(&ctx->hw_device_ctx);
 				use_vaapi = 0;
 				if (init_video_encoder(ctx, width, height,
@@ -1350,15 +1232,11 @@ media_open_transcode(media_ctx_t *ctx)
 		if (init_video_filters(ctx, width, height, tb,
 		    pix_fmt, use_vaapi,
 		    ctx->video_dec->colorspace,
-		    ctx->video_dec->color_range, dec_hw_frames) < 0) {
+		    ctx->video_dec->color_range) < 0) {
 			if (use_vaapi) {
 				fprintf(stderr, "VAAPI filters failed, "
 				    "trying software\n");
 				avcodec_free_context(&ctx->video_enc);
-				av_buffer_unref(&ctx->video_dec->hw_device_ctx);
-				ctx->video_dec->get_format = NULL;
-				av_buffer_unref(&dec_hw_frames);
-				dec_hw_frames = NULL;
 				av_buffer_unref(&ctx->hw_device_ctx);
 				use_vaapi = 0;
 				if (init_video_encoder(ctx, width, height,
@@ -1368,16 +1246,13 @@ media_open_transcode(media_ctx_t *ctx)
 				if (init_video_filters(ctx, width, height,
 				    tb, pix_fmt, 0,
 				    ctx->video_dec->colorspace,
-				    ctx->video_dec->color_range,
-				    NULL) < 0)
+				    ctx->video_dec->color_range) < 0)
 					return -1;
 			} else {
 				return -1;
 			}
 		}
 	}
-
-	av_buffer_unref(&dec_hw_frames);
 
 	/* Init audio encoder */
 	if (has_audio) {
@@ -1567,7 +1442,7 @@ media_open_screen(media_ctx_t *ctx)
 	    ctx->ifmt_ctx->streams[0]->time_base,
 	    ctx->video_dec->pix_fmt, use_vaapi,
 	    ctx->video_dec->colorspace,
-	    ctx->video_dec->color_range, NULL) < 0) {
+	    ctx->video_dec->color_range) < 0) {
 		if (use_vaapi) {
 			fprintf(stderr, "VAAPI filters failed, "
 			    "trying software\n");
@@ -1581,7 +1456,7 @@ media_open_screen(media_ctx_t *ctx)
 			    ctx->ifmt_ctx->streams[0]->time_base,
 			    ctx->video_dec->pix_fmt, 0,
 			    ctx->video_dec->colorspace,
-			    ctx->video_dec->color_range, NULL) < 0)
+			    ctx->video_dec->color_range) < 0)
 				return -1;
 		} else {
 			return -1;
