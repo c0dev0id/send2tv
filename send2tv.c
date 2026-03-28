@@ -1244,7 +1244,6 @@ main(int argc, char *argv[])
 
 					DPRINTF("seek: restart at %ds\n",
 					    etarget);
-					ctrl_send(ctrl_fd, "STOP\n");
 					media.running = 0;
 					pthread_join(media.thread, NULL);
 
@@ -1341,7 +1340,6 @@ main(int argc, char *argv[])
 
 					DPRINTF("seek: restart at %ds\n",
 					    target);
-					ctrl_send(ctrl_fd, "STOP\n");
 					media.running = 0;
 					pthread_join(media.thread, NULL);
 
