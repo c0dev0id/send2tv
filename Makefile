@@ -8,7 +8,7 @@ PKG_LIBS != pkg-config --libs libavformat libavcodec libavutil \
 LDFLAGS = ${PKG_LIBS}
 LDFLAGS += -lpthread
 
-SRC = send2tv.c upnp.c httpd.c media.c dlna.c
+SRC = send2tv.c upnp.c httpd.c media.c dlna.c sink.c
 OBJ = ${SRC:.c=.o}
 
 send2tv: ${OBJ}

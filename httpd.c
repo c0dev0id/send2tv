@@ -163,13 +163,14 @@ serve_pipe(int client_fd, media_ctx_t *media, int head_only)
  * Handle one HTTP request.
  */
 static void
-handle_request(int client_fd, media_ctx_t *media)
+handle_request(int client_fd, httpd_ctx_t *ctx)
 {
-	char	 req[4096];
-	ssize_t	 n;
-	int	 head_only = 0;
-	off_t	 range_start = -1;
-	char	*line, *p;
+	media_ctx_t	*media = ctx->media;
+	char		 req[4096];
+	ssize_t		 n;
+	int		 head_only = 0;
+	off_t		 range_start = -1;
+	char		*line, *p;
 
 	n = recv(client_fd, req, sizeof(req) - 1, 0);
 	if (n <= 0)
@@ -188,10 +189,42 @@ handle_request(int client_fd, media_ctx_t *media)
 		return;
 	}
 
-	/* Check path is /media */
+	/* Extract path */
 	p = strchr(req, ' ');
 	if (p != NULL)
 		p++;
+
+	/* Serve idle image */
+	if (p != NULL && strncmp(p, "/image", 6) == 0) {
+		if (ctx->image_data != NULL && ctx->image_size > 0) {
+			char dlna[256];
+			char hdrs[512];
+			int  hlen;
+
+			build_dlna_features(dlna, sizeof(dlna),
+			    "JPEG_LRG", 0);
+			hlen = snprintf(hdrs, sizeof(hdrs),
+			    "HTTP/1.1 200 OK\r\n"
+			    "Content-Type: image/jpeg\r\n"
+			    "Content-Length: %zu\r\n"
+			    "transferMode.dlna.org: Interactive\r\n"
+			    "contentFeatures.dlna.org: %s\r\n"
+			    "Connection: close\r\n\r\n",
+			    ctx->image_size, dlna);
+			send_all(client_fd, hdrs, hlen);
+			if (!head_only)
+				send_all(client_fd, ctx->image_data,
+				    ctx->image_size);
+		} else {
+			send_headers(client_fd, 404, "Not Found",
+			    "text/plain", 9, -1, -1, -1, 0, NULL);
+			if (!head_only)
+				send_all(client_fd, "Not Found", 9);
+		}
+		return;
+	}
+
+	/* Check path is /media */
 	if (p == NULL || strncmp(p, "/media", 6) != 0) {
 		send_headers(client_fd, 404, "Not Found",
 		    "text/plain", 9, -1, -1, -1, 0, NULL);
@@ -210,7 +243,8 @@ handle_request(int client_fd, media_ctx_t *media)
 		}
 	}
 
-	if (media->needs_transcode || media->mode == MODE_SCREEN)
+	if (media->needs_transcode || media->mode == MODE_SCREEN ||
+	    media->mode == MODE_SINK)
 		serve_pipe(client_fd, media, head_only);
 	else
 		serve_file(client_fd, media, head_only, range_start);
@@ -243,7 +277,7 @@ httpd_thread(void *arg)
 
 		{ int flag = 1; setsockopt(client_fd, IPPROTO_TCP,
 		    TCP_NODELAY, &flag, sizeof(flag)); }
-		handle_request(client_fd, ctx->media);
+		handle_request(client_fd, ctx);
 		close(client_fd);
 	}
 

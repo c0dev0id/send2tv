@@ -33,7 +33,8 @@ extern volatile int running;
 /* Media mode */
 enum {
 	MODE_FILE,
-	MODE_SCREEN
+	MODE_SCREEN,
+	MODE_SINK = 2
 };
 
 /* Transcode video codec */
@@ -91,6 +92,8 @@ typedef struct {
 	int		 start_sec;	/* transcode start position */
 	int		 duration_sec;	/* total duration (0 if unknown) */
 
+	AVIOContext	*avio_in;	/* custom AVIO for sink socket input, freed by media_close */
+
 	/* audio channel remapping (map[out] = in_index, -1 = silence) */
 	int		 channelmap[6];
 	int		 has_channelmap;
@@ -116,6 +119,8 @@ typedef struct {
 	media_ctx_t	*media;
 	volatile int	 running;
 	pthread_t	 thread;
+	const uint8_t	*image_data;
+	size_t		 image_size;
 } httpd_ctx_t;
 
 /* Samsung app entry */
@@ -159,6 +164,7 @@ int	 httpd_start(httpd_ctx_t *ctx, media_ctx_t *media, int port);
 void	 httpd_stop(httpd_ctx_t *ctx);
 
 /* media.c */
+int	 ffmpeg_interrupt_cb(void *opaque);
 void	 media_list_audio_streams(const char *filepath);
 int	 media_probe(media_ctx_t *ctx, const char *filepath, int force_transcode);
 int	 media_open_transcode(media_ctx_t *ctx);
@@ -167,5 +173,14 @@ int	 media_open_screen(media_ctx_t *ctx);
 void	*media_transcode_thread(void *arg);
 void	*media_capture_thread(void *arg);
 void	 media_close(media_ctx_t *ctx);
+
+/* media.c — sink additions */
+int	 media_probe_avfmt(media_ctx_t *ctx, AVFormatContext *fmt, int force_transcode);
+int	 media_open_remux(media_ctx_t *ctx);
+void	*media_remux_thread(void *arg);
+
+/* sink.c */
+int	 sink_run(upnp_ctx_t *upnp, const char *sock_path, int port,
+	    int vcodec, int bitrate);
 
 #endif /* SEND2TV_H */

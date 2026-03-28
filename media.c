@@ -13,7 +13,7 @@
  * so that a Ctrl+C (which sets the global) interrupts any FFmpeg
  * blocking call regardless of which phase we are in.
  */
-static int
+int
 ffmpeg_interrupt_cb(void *opaque)
 {
 	media_ctx_t *ctx = opaque;
@@ -324,41 +324,17 @@ media_list_audio_streams(const char *filepath)
 }
 
 /*
- * Probe a media file to determine codecs and whether transcoding is needed.
+ * Analyse an already-opened AVFormatContext: find streams, determine
+ * whether transcoding is needed, set MIME type and DLNA profile.
+ * Does not close or store fmt — caller decides what to do with it.
  */
-int
-media_probe(media_ctx_t *ctx, const char *filepath, int force_transcode)
+static int
+media_analyze(media_ctx_t *ctx, AVFormatContext *fmt, int force_transcode)
 {
-	AVFormatContext		*fmt = NULL;
 	const char		*fmt_name;
-	int			 ret;
 	int			 has_video = 0;
 	enum AVCodecID		 vid_codec = AV_CODEC_ID_NONE;
 	enum AVCodecID		 aud_codec = AV_CODEC_ID_NONE;
-
-	fmt = avformat_alloc_context();
-	if (fmt == NULL)
-		return -1;
-	fmt->interrupt_callback.callback = ffmpeg_interrupt_cb;
-	fmt->interrupt_callback.opaque = ctx;
-
-	ret = avformat_open_input(&fmt, filepath, NULL, NULL);
-	if (ret < 0) {
-		/* fmt was freed by avformat_open_input on failure */
-		if (running)
-			fprintf(stderr, "Cannot open %s: %s\n", filepath,
-			    av_err2str(ret));
-		return -1;
-	}
-
-	ret = avformat_find_stream_info(fmt, NULL);
-	if (ret < 0) {
-		if (running)
-			fprintf(stderr, "Cannot find stream info: %s\n",
-			    av_err2str(ret));
-		avformat_close_input(&fmt);
-		return -1;
-	}
 
 	ctx->video_idx = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO,
 	    -1, -1, NULL, 0);
@@ -451,9 +427,50 @@ media_probe(media_ctx_t *ctx, const char *filepath, int force_transcode)
 	DPRINTF("media: needs_transcode=%d, mime=%s\n",
 	    ctx->needs_transcode, ctx->mime_type);
 
-	/* Save duration before potentially closing fmt */
+	/* Save duration */
 	if (fmt->duration != AV_NOPTS_VALUE && fmt->duration > 0)
 		ctx->duration_sec = (int)(fmt->duration / AV_TIME_BASE);
+
+	return 0;
+}
+
+/*
+ * Probe a media file to determine codecs and whether transcoding is needed.
+ */
+int
+media_probe(media_ctx_t *ctx, const char *filepath, int force_transcode)
+{
+	AVFormatContext		*fmt = NULL;
+	int			 ret;
+
+	fmt = avformat_alloc_context();
+	if (fmt == NULL)
+		return -1;
+	fmt->interrupt_callback.callback = ffmpeg_interrupt_cb;
+	fmt->interrupt_callback.opaque = ctx;
+
+	ret = avformat_open_input(&fmt, filepath, NULL, NULL);
+	if (ret < 0) {
+		/* fmt was freed by avformat_open_input on failure */
+		if (running)
+			fprintf(stderr, "Cannot open %s: %s\n", filepath,
+			    av_err2str(ret));
+		return -1;
+	}
+
+	ret = avformat_find_stream_info(fmt, NULL);
+	if (ret < 0) {
+		if (running)
+			fprintf(stderr, "Cannot find stream info: %s\n",
+			    av_err2str(ret));
+		avformat_close_input(&fmt);
+		return -1;
+	}
+
+	if (media_analyze(ctx, fmt, force_transcode) < 0) {
+		avformat_close_input(&fmt);
+		return -1;
+	}
 
 	/* Keep format context open if we need to transcode */
 	if (ctx->needs_transcode) {
@@ -462,6 +479,31 @@ media_probe(media_ctx_t *ctx, const char *filepath, int force_transcode)
 		avformat_close_input(&fmt);
 	}
 
+	return 0;
+}
+
+/*
+ * Probe an already-opened AVFormatContext (e.g. from a socket AVIO).
+ * Calls avformat_find_stream_info, then analyzes streams.
+ * Always keeps fmt as ctx->ifmt_ctx (non-seekable; can't rewind).
+ * Always sets output MIME/profile to MPEG-TS.
+ */
+int
+media_probe_avfmt(media_ctx_t *ctx, AVFormatContext *fmt, int force_transcode)
+{
+	int ret = avformat_find_stream_info(fmt, NULL);
+	if (ret < 0) {
+		fprintf(stderr, "Cannot find stream info: %s\n",
+		    av_err2str(ret));
+		return -1;
+	}
+	if (media_analyze(ctx, fmt, force_transcode) < 0)
+		return -1;
+	ctx->ifmt_ctx = fmt;
+	/* Output is always MPEG-TS in sink mode */
+	strlcpy(ctx->mime_type, "video/mp2t", sizeof(ctx->mime_type));
+	strlcpy(ctx->dlna_profile, "AVC_TS_HP_HD_AAC_MULT5",
+	    sizeof(ctx->dlna_profile));
 	return 0;
 }
 
@@ -709,6 +751,150 @@ init_output(media_ctx_t *ctx, int has_video, int has_audio)
 	}
 
 	return 0;
+}
+
+/*
+ * Set up the output muxer for remux mode (copy streams, no re-encode).
+ */
+static int
+init_output_remux(media_ctx_t *ctx)
+{
+	int		 pipefd[2];
+	uint8_t		*avio_buf;
+	AVIOContext	*avio;
+	int		 ret;
+
+	if (pipe(pipefd) < 0) {
+		perror("pipe");
+		return -1;
+	}
+	ctx->pipe_rd = pipefd[0];
+	ctx->pipe_wr = pipefd[1];
+
+	ret = avformat_alloc_output_context2(&ctx->ofmt_ctx, NULL,
+	    "mpegts", NULL);
+	if (ret < 0) {
+		fprintf(stderr, "Cannot create output context: %s\n",
+		    av_err2str(ret));
+		return -1;
+	}
+	ctx->ofmt_ctx->flush_packets = 1;
+	ctx->ofmt_ctx->max_delay = 0;
+	ctx->ofmt_ctx->max_interleave_delta = 0;
+	av_opt_set(ctx->ofmt_ctx->priv_data, "mpegts_flags",
+	    "+resend_headers", AV_OPT_SEARCH_CHILDREN);
+
+	avio_buf = av_malloc(SEND2TV_AVIO_SIZE);
+	if (avio_buf == NULL)
+		return -1;
+	avio = avio_alloc_context(avio_buf, SEND2TV_AVIO_SIZE, 1,
+	    ctx, NULL, avio_write_pipe, NULL);
+	if (avio == NULL) {
+		av_free(avio_buf);
+		return -1;
+	}
+	ctx->ofmt_ctx->pb = avio;
+	ctx->ofmt_ctx->flags |= AVFMT_FLAG_CUSTOM_IO;
+
+	if (ctx->video_idx >= 0) {
+		AVStream *in_st = ctx->ifmt_ctx->streams[ctx->video_idx];
+		AVStream *out_st = avformat_new_stream(ctx->ofmt_ctx, NULL);
+		if (out_st == NULL)
+			return -1;
+		if (avcodec_parameters_copy(out_st->codecpar,
+		    in_st->codecpar) < 0)
+			return -1;
+		out_st->time_base = in_st->time_base;
+	}
+	if (ctx->audio_idx >= 0) {
+		AVStream *in_st = ctx->ifmt_ctx->streams[ctx->audio_idx];
+		AVStream *out_st = avformat_new_stream(ctx->ofmt_ctx, NULL);
+		if (out_st == NULL)
+			return -1;
+		if (avcodec_parameters_copy(out_st->codecpar,
+		    in_st->codecpar) < 0)
+			return -1;
+		out_st->time_base = in_st->time_base;
+	}
+
+	ret = avformat_write_header(ctx->ofmt_ctx, NULL);
+	if (ret < 0) {
+		fprintf(stderr, "Cannot write MPEG-TS header: %s\n",
+		    av_err2str(ret));
+		return -1;
+	}
+	return 0;
+}
+
+int
+media_open_remux(media_ctx_t *ctx)
+{
+	ctx->ifmt_ctx->interrupt_callback.callback = ffmpeg_interrupt_cb;
+	ctx->ifmt_ctx->interrupt_callback.opaque = ctx;
+	if (init_output_remux(ctx) < 0)
+		return -1;
+	strlcpy(ctx->mime_type, "video/mp2t", sizeof(ctx->mime_type));
+	return 0;
+}
+
+void *
+media_remux_thread(void *arg)
+{
+	media_ctx_t	*ctx = arg;
+	AVPacket	*pkt;
+	int		 vid_out = -1, aud_out = -1, out_idx = 0;
+
+	if (ctx->video_idx >= 0)
+		vid_out = out_idx++;
+	if (ctx->audio_idx >= 0)
+		aud_out = out_idx++;
+
+	pkt = av_packet_alloc();
+	if (pkt == NULL) {
+		ctx->running = 0;
+		return NULL;
+	}
+
+	while (ctx->running && running) {
+		int	 ret = av_read_frame(ctx->ifmt_ctx, pkt);
+		int	 dst = -1;
+		AVStream *in_st = NULL, *out_st = NULL;
+
+		if (ret < 0)
+			break;
+
+		if (pkt->stream_index == ctx->video_idx && vid_out >= 0) {
+			dst    = vid_out;
+			in_st  = ctx->ifmt_ctx->streams[ctx->video_idx];
+			out_st = ctx->ofmt_ctx->streams[vid_out];
+		} else if (pkt->stream_index == ctx->audio_idx &&
+		    aud_out >= 0) {
+			dst    = aud_out;
+			in_st  = ctx->ifmt_ctx->streams[ctx->audio_idx];
+			out_st = ctx->ofmt_ctx->streams[aud_out];
+		}
+
+		if (dst >= 0) {
+			av_packet_rescale_ts(pkt, in_st->time_base,
+			    out_st->time_base);
+			pkt->stream_index = dst;
+			pkt->pos = -1;
+			if (av_interleaved_write_frame(ctx->ofmt_ctx,
+			    pkt) < 0)
+				break;
+		} else {
+			av_packet_unref(pkt);
+		}
+	}
+
+	av_write_trailer(ctx->ofmt_ctx);
+	if (ctx->pipe_wr >= 0) {
+		close(ctx->pipe_wr);
+		ctx->pipe_wr = -1;
+	}
+	av_packet_free(&pkt);
+	ctx->running = 0;
+	return NULL;
 }
 
 /*
@@ -1728,6 +1914,10 @@ media_close(media_ctx_t *ctx)
 		avcodec_free_context(&ctx->sndio_dec);
 	if (ctx->ifmt_ctx != NULL)
 		avformat_close_input(&ctx->ifmt_ctx);
+	if (ctx->avio_in != NULL) {
+		av_free(ctx->avio_in->buffer);
+		avio_context_free(&ctx->avio_in);
+	}
 	if (ctx->sndio_ctx != NULL)
 		avformat_close_input(&ctx->sndio_ctx);
 	if (ctx->ofmt_ctx != NULL) {

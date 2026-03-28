@@ -82,6 +82,7 @@ usage(void)
 	fprintf(stderr,
 	    "usage: send2tv [-tv] [-b kbps] [-c codec] -h host file ...\n"
 	    "       send2tv [-av] [-b kbps] [-c codec] -h host -s\n"
+	    "       send2tv [-v] -h host --sink [--sock path]\n"
 	    "       send2tv [-v] -d\n"
 	    "       send2tv [-v] -q -h host\n"
 	    "       send2tv [-v] -w\n"
@@ -98,6 +99,8 @@ usage(void)
 	    "  -p port   HTTP server port (default: auto)\n"
 	    "  -b kbps   video bitrate in kbps (default: 2000)\n"
 	    "  -w        send Wake-on-LAN packet to configured MAC\n"
+	    "  --sink      run as sink daemon, reading from socket\n"
+	    "  --sock path Unix socket path (default: /tmp/send2tv.sock)\n"
 	    "  --app          list installed apps on the TV\n"
 	    "  --app <n>      launch app whose name contains <n> (case-insensitive)\n"
 	    "  --channelmap   list 5.1 channel remapping presets\n"
@@ -530,6 +533,8 @@ main(int argc, char *argv[])
 		{ "app",        optional_argument, NULL, 'A' },
 		{ "channelmap", optional_argument, NULL, 'M' },
 		{ "lang",       optional_argument, NULL, 'L' },
+		{ "sink",       no_argument,       NULL, 'S' },
+		{ "sock",       required_argument, NULL, 'K' },
 		{ NULL,         0,                 NULL,  0  }
 	};
 	const char	*host = NULL;
@@ -547,6 +552,8 @@ main(int argc, char *argv[])
 	int		 query = 0;
 	int		 wol_only = 0;
 	int		 app_mode = 0;
+	int		 sink_mode = 0;
+	const char	*sock_path = "/tmp/send2tv.sock";
 	int		 port = 0;
 	int		 bitrate = 2000;
 	int		 vcodec = VCODEC_H264;
@@ -629,6 +636,12 @@ main(int argc, char *argv[])
 			else if (optind < argc && argv[optind][0] != '-')
 				lang_arg = argv[optind++];
 			/* else NULL → list mode */
+			break;
+		case 'S':
+			sink_mode = 1;
+			break;
+		case 'K':
+			sock_path = optarg;
 			break;
 		default:
 			usage();
@@ -772,6 +785,57 @@ main(int argc, char *argv[])
 		if (upnp_find_transport(&upnp) < 0)
 			return 1;
 		return upnp_query_capabilities(&upnp, 1, NULL, 0) < 0;
+	}
+
+	/* Sink mode: persistent daemon reading video from a Unix socket */
+	if (sink_mode) {
+		if (host == NULL) {
+			if (discover_and_select(conf_host,
+			    sizeof(conf_host)) < 0)
+				return 1;
+			host = conf_host;
+		}
+
+		/* Set up signal handlers */
+		signal(SIGINT, sighandler);
+		signal(SIGTERM, sighandler);
+		signal(SIGPIPE, SIG_IGN);
+
+		memset(&upnp, 0, sizeof(upnp));
+		strlcpy(upnp.tv_ip, host, sizeof(upnp.tv_ip));
+		if (mac != NULL)
+			strlcpy(upnp.tv_mac, mac, sizeof(upnp.tv_mac));
+
+		if (upnp_get_local_ip(&upnp) < 0) {
+			fprintf(stderr, "Cannot determine local IP\n");
+			return 1;
+		}
+		printf("Local IP: %s\n", upnp.local_ip);
+
+		printf("Connecting to TV at %s...\n", upnp.tv_ip);
+		if (connect_to_tv(&upnp) < 0)
+			return 1;
+		printf("AVTransport: %s:%d%s\n", upnp.tv_ip,
+		    upnp.tv_port, upnp.control_url);
+
+		/* Auto-detect best transcode codec */
+		if (strcmp(codec, "auto") == 0) {
+			char detected[32] = "";
+
+			if (upnp_query_capabilities(&upnp, 0, detected,
+			    sizeof(detected)) == 0 &&
+			    detected[0] != '\0') {
+				if (strcmp(detected, "hevc") == 0)
+					vcodec = VCODEC_HEVC;
+				else
+					vcodec = VCODEC_H264;
+				DPRINTF("auto-detected transcode codec: "
+				    "%s\n", detected);
+			}
+		}
+
+		sink_run(&upnp, sock_path, port, vcodec, bitrate);
+		return 0;
 	}
 
 	/* Validate arguments */
