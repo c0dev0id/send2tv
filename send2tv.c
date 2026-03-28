@@ -464,17 +464,18 @@ connect_to_tv(upnp_ctx_t *upnp)
 /*
  * Resolve a web URL to a direct stream URL using yt-dlp.
  * Writes the direct URL into out_url and the video title into out_title.
+ * If out_duration_sec is non-NULL, writes the duration in seconds (0 if unknown).
  * Returns 0 on success, -1 on failure.
  */
 static int
 ytdlp_resolve(const char *url, char *out_url, size_t url_sz,
-    char *out_title, size_t title_sz)
+    char *out_title, size_t title_sz, int *out_duration_sec)
 {
 	const char *args[] = {
 		"yt-dlp", "--no-playlist",
 		"-S", "vcodec:h264,proto,ext:mp4,vcodec:hevc",
 		"-f", "best[height<=1080]/best",
-		"--print", "%(title)s\n%(url)s",
+		"--print", "%(title)s\n%(url)s\n%(duration)s",
 		"--", url, NULL
 	};
 	int	 pipefd[2];
@@ -539,7 +540,7 @@ ytdlp_resolve(const char *url, char *out_url, size_t url_sz,
 	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
 		return -1;
 
-	/* Output is: title\nurl\n */
+	/* Output is: title\nurl\nduration\n */
 	nl = strchr(buf, '\n');
 	if (nl == NULL)
 		return -1;
@@ -553,15 +554,33 @@ ytdlp_resolve(const char *url, char *out_url, size_t url_sz,
 
 	/* Strip trailing whitespace from URL */
 	url_start = nl + 1;
+	nl = strchr(url_start, '\n');
+	if (nl != NULL)
+		*nl = '\0';
 	len = strlen(url_start);
-	while (len > 0 && (url_start[len - 1] == '\n' ||
-	    url_start[len - 1] == '\r' || url_start[len - 1] == ' '))
+	while (len > 0 && (url_start[len - 1] == '\r' ||
+	    url_start[len - 1] == ' '))
 		url_start[--len] = '\0';
 
 	if (url_start[0] == '\0')
 		return -1;
 
 	strlcpy(out_url, url_start, url_sz);
+
+	/* Parse duration (third line, may be "NA" or empty) */
+	if (out_duration_sec != NULL) {
+		*out_duration_sec = 0;
+		if (nl != NULL) {
+			char *dur = nl + 1;
+			len = strlen(dur);
+			while (len > 0 && (dur[len - 1] == '\n' ||
+			    dur[len - 1] == '\r' || dur[len - 1] == ' '))
+				dur[--len] = '\0';
+			if (dur[0] != '\0' && dur[0] != 'N')
+				*out_duration_sec = atoi(dur);
+		}
+	}
+
 	return 0;
 }
 
@@ -575,6 +594,7 @@ main(int argc, char *argv[])
 		{ "server",     no_argument,       NULL, 'S' },
 		{ "ctrl",       required_argument, NULL, 'C' },
 		{ "data",       required_argument, NULL, 'D' },
+		{ "direct",     no_argument,       NULL,  1  },
 		{ NULL,         0,                 NULL,  0  }
 	};
 	const char	*host = NULL;
@@ -593,6 +613,7 @@ main(int argc, char *argv[])
 	int		 wol_only = 0;
 	int		 app_mode = 0;
 	int		 server_mode = 0;
+	int		 prefer_direct = 0;
 	const char	*ctrl_path = "/tmp/send2tv.ctrl";
 	const char	*data_path = "/tmp/send2tv.data";
 	int		 port = 0;
@@ -687,6 +708,9 @@ main(int argc, char *argv[])
 			break;
 		case 'D':
 			data_path = optarg;
+			break;
+		case 1:
+			prefer_direct = 1;
 			break;
 		default:
 			usage();
@@ -1039,6 +1063,7 @@ main(int argc, char *argv[])
 		const char *title;
 		char ytdlp_url[2048];
 		char ytdlp_title[256];
+		int ytdlp_duration = 0;
 		int force_tc = transcode;
 
 		/* Resolve web URLs via yt-dlp */
@@ -1048,16 +1073,144 @@ main(int argc, char *argv[])
 			printf("\n[%d/%d] Resolving via yt-dlp: %s\n",
 			    fileidx + 1, argc, file);
 			if (ytdlp_resolve(file, ytdlp_url, sizeof(ytdlp_url),
-			    ytdlp_title, sizeof(ytdlp_title)) < 0) {
+			    ytdlp_title, sizeof(ytdlp_title),
+			    &ytdlp_duration) < 0) {
 				if (running)
 					fprintf(stderr,
 					    "yt-dlp failed to resolve "
 					    "%s, skipping\n", file);
 				continue;
 			}
-			DPRINTF("yt-dlp title='%s' url='%s'\n",
-			    ytdlp_title, ytdlp_url);
+			DPRINTF("yt-dlp title='%s' url='%s' duration=%ds\n",
+			    ytdlp_title, ytdlp_url, ytdlp_duration);
 			file = ytdlp_url;
+
+			/*
+			 * --direct: for HLS/DASH URLs, tell the server to
+			 * set the TV's transport URI directly (TV fetches
+			 * the stream itself — no CPU overhead on our end).
+			 */
+			if (prefer_direct && strstr(ytdlp_url, "m3u8")) {
+				char play_cmd[1024];
+
+				printf("Direct play (TV fetches stream): %s\n",
+				    ytdlp_title[0] ? ytdlp_title : file);
+
+				snprintf(play_cmd, sizeof(play_cmd),
+				    "PLAY_DIRECT %s "
+				    "application/vnd.apple.mpegurl\n",
+				    ytdlp_url);
+				ctrl_send(ctrl_fd, play_cmd);
+
+				if (!running)
+					goto next_file;
+
+				if (term_raw_mode() == 0)
+					printf("Direct play. Keys: "
+					    "arrows=seek, q=next, Q=quit\n");
+				else
+					printf("Direct play. "
+					    "Press Ctrl+C to stop.\n");
+
+				{
+					struct pollfd	 pfd;
+					unsigned char	 buf[8];
+					ssize_t		 n;
+					int		 seek_delta = 0;
+					int		 seek_pending = 0;
+					struct timespec	 seek_ts;
+					int		 dur = ytdlp_duration;
+
+					pfd.fd = STDIN_FILENO;
+					pfd.events = POLLIN;
+
+					while (running) {
+						int timeout = 500;
+
+						if (seek_pending) {
+							struct timespec now;
+							long elapsed_ms;
+							int pos = 0, target;
+
+							clock_gettime(
+							    CLOCK_MONOTONIC,
+							    &now);
+							elapsed_ms =
+							    (now.tv_sec -
+							    seek_ts.tv_sec)
+							    * 1000 +
+							    (now.tv_nsec -
+							    seek_ts.tv_nsec)
+							    / 1000000;
+							if (elapsed_ms >= 500) {
+								seek_pending = 0;
+								if (upnp.control_url[0] != '\0')
+									upnp_get_position(
+									    &upnp, &pos);
+								target = pos +
+								    seek_delta;
+								seek_delta = 0;
+								if (target < 0)
+									target = 0;
+								if (dur > 0 &&
+								    target > dur - 5)
+									target =
+									    dur - 5;
+								upnp_seek(&upnp,
+								    target);
+								continue;
+							} else {
+								timeout = (int)(500 - elapsed_ms);
+							}
+						}
+
+						if (poll(&pfd, 1, timeout)
+						    <= 0)
+							continue;
+
+						n = read(STDIN_FILENO, buf,
+						    sizeof(buf));
+						if (n <= 0)
+							continue;
+
+						if (buf[0] == 'q')
+							break;
+						if (buf[0] == 'Q' ||
+						    buf[0] == 0x03) {
+							running = 0;
+							break;
+						}
+
+						/* Arrow key seek */
+						if (n >= 3 &&
+						    buf[0] == 0x1b &&
+						    buf[1] == '[') {
+							int delta = 0;
+
+							if (buf[2] == 'C')
+								delta = 30;
+							else if (buf[2] == 'D')
+								delta = -30;
+							else if (buf[2] == 'A')
+								delta = 300;
+							else if (buf[2] == 'B')
+								delta = -300;
+							if (delta != 0) {
+								seek_delta +=
+								    delta;
+								seek_pending =
+								    1;
+								clock_gettime(
+								    CLOCK_MONOTONIC,
+								    &seek_ts);
+							}
+						}
+					}
+				}
+				ctrl_send(ctrl_fd, "STOP\n");
+				term_restore();
+				goto next_file;
+			}
 		} else {
 			printf("\n[%d/%d] %s\n", fileidx + 1, argc, file);
 		}

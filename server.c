@@ -161,7 +161,7 @@ server_run(upnp_ctx_t *upnp, httpd_ctx_t *httpd,
 		/* Control command from connected client */
 		if (ctrl_fd >= 0 && nfds == 3 &&
 		    (pfds[2].revents & (POLLIN | POLLHUP))) {
-			char	 line[256];
+			char	 line[1024];
 			char	 mime[64], dlna[64];
 			int	 n;
 
@@ -223,6 +223,24 @@ server_run(upnp_ctx_t *upnp, httpd_ctx_t *httpd,
 						fprintf(stderr,
 						    "server: TV playback "
 						    "failed\n");
+				}
+
+			} else if (strncmp(line, "PLAY_DIRECT ", 12) == 0) {
+				char durl[768];
+
+				/* TV fetches the URL directly (no pipe) */
+				if (sscanf(line + 12, "%767s %63s",
+				    durl, mime) >= 1) {
+					printf("Server: direct → %s\n",
+					    durl);
+					if (upnp_set_uri(upnp, durl, mime[0] ?
+					    mime :
+					    "application/vnd.apple.mpegurl",
+					    "Direct", 1, "") < 0 ||
+					    upnp_play(upnp) < 0)
+						fprintf(stderr,
+						    "server: direct "
+						    "playback failed\n");
 				}
 
 			} else if (strcmp(line, "STOP") == 0) {
